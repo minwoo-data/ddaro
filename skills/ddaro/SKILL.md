@@ -1,7 +1,7 @@
 ---
 name: ddaro
 description: "Worktree-based parallel workflow. Create isolated worktree + branch, commit with deletion-aware checks, review and merge to main by diff size, recover from session/IDE crashes via per-commit context MD. Subcommands: start / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
-version: "0.1.2"
+version: "0.2.0"
 author: "haroom"
 repository: "https://github.com/minwoo-data/ddaro"
 license: "MIT"
@@ -412,7 +412,7 @@ Work complete, time to ship.
 
 ## /ddaro:clear [name]
 
-Clean up ddaro worktrees whose branches are already merged to main. (Renamed from `/ddaro:clean` in v0.1.2; the old name is accepted as a deprecated alias that prints a one-line warning and forwards here. The alias will be removed in v0.2.0.)
+Clean up ddaro worktrees whose branches are already merged to main. (Renamed from `/ddaro:clean` in v0.1.2; the deprecated alias was removed in v0.2.0.)
 
 1. No name → list all merged ddaro-owned worktrees as candidates.
 2. Confirm via `git branch --merged main`.

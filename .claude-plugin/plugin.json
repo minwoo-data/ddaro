@@ -1,6 +1,6 @@
 {
   "name": "ddaro",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Worktree-based parallel workflow for Claude Code sessions. Isolated branch work with deletion-aware commits, size-based merge review, and crash-recoverable context logs. Korean triggers: /ddaro, 따로, 병렬로. English: /ddaro, parallel, isolated.",
   "author": {
     "name": "haroom",

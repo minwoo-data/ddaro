@@ -4,6 +4,27 @@ All notable changes to this plugin are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-23
+
+### Removed
+- **`/ddaro:clean` deprecated alias**. The v0.1.2 rename (`/ddaro:clean` -> `/ddaro:clear`) shipped with a one-version grace alias. That alias is now gone. Typing `/ddaro:clean` will report "unknown command". Users still on muscle memory should switch to `/ddaro:clear`.
+
+### Added
+- **`/ddaro:merge` optional `/prism` hint**. When the `prism` plugin is detected (file stat on the plugin cache path), the merge confirmation appends one informational line: "Tip: for a deeper multi-angle review of this diff, run /prism after merging." Purely advisory - ddaro never calls prism at runtime and does not require it installed.
+
+### Fixed
+- **`commands/ddaro.md` dispatcher description**: subcommand list was stale (listed `/ddaro:clean`, missing `/ddaro:resume`). Now lists the current v0.2.0 surface: `start | resume | commit | merge | status | list | summary | clear | abandon | setting | config`.
+
+## [0.1.2] - 2026-04-23
+
+### Added
+- **`/ddaro:clear`**: new command for post-merge cleanup of merged ddaro worktrees. Renamed from `/ddaro:clean` to avoid confusion with git clean semantics. Safe (refuses unmerged); delegates force-discard to `/ddaro:abandon`.
+- **`/ddaro:resume`**: new command for re-entering a ddaro worktree after a crash or days-later return. Combines the existing-worktree scan from `/ddaro:start`, the recap from `/ddaro:summary`, and an auto-generated cd + paste-ready prompt in one step.
+
+### Fixed
+- **Missing command files**: v0.1.2 SKILL.md documented `/ddaro:clear` and `/ddaro:resume` but the `commands/` folder was never updated, so Claude Code never registered those slash commands. This release adds the command files that should have shipped in v0.1.2.
+- **`commands/ddaro-clean.md`** kept temporarily as a deprecated alias that prints a one-line warning and forwards to `/ddaro:clear`. (Removed in v0.2.0.)
+
 ## [0.1.1] - 2026-04-23
 
 ### Fixed

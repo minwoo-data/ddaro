@@ -21,4 +21,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## `/ddaro merge`" a
 - Merge method: default `gh pr create` (PR path) unless `--local` (switch to main worktree + provide copy-paste merge prompt).
 - After merge success, ask `y/n` to clean up worktree:
   - `y` (default): `git branch -d d-<name>`, `git push origin --delete d-<name>`, `git worktree remove <path>`
-  - `n`: keep worktree, advise `/ddaro:clean` later
+  - `n`: keep worktree, advise `/ddaro:clear` later
+- Optional hint: if the `prism` plugin is installed (check existence of `${HOME}/.claude/plugins/cache/haroom_plugins/prism/` or `${HOME}/.claude/skills/prism/`), append a one-line suggestion before the final y/n:
+  "`Tip: for a deeper multi-angle review of this diff, run /prism after merging.`"
+  This is purely informational - ddaro never calls prism and does not require it installed.
