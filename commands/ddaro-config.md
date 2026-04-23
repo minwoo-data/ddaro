@@ -1,13 +1,14 @@
 ---
 name: ddaro:config
-description: "Direct config access - show settings, or set a key in one command. For users who know the key names. Use /ddaro:setting for guided menu. Also toggles the optional main_protection hook (off/warn/strict)."
-argument-hint: "[init | main <path> | protect <path> | unprotect <path> | external <pattern> | naming <key> | pool <key> | language <en|ko> | context <true|false> | max <N> | main_protection <off|warn|strict>]"
+description: "Config access. No args → interactive 9-item menu. With args → direct key set (for users who know the keys). Also toggles the optional main_protection hook (off/warn/strict)."
+argument-hint: "[menu (default) | show | init | main <path> | protect <path> | unprotect <path> | external <pattern> | naming <key> | pool <key> | language <en|ko> | context <true|false> | max <N> | main_protection <off|warn|strict>]"
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
 ---
 
 Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:config [action] [value]" and the "## Main protection hooks" section, then execute with `$ARGUMENTS` as action + value.
 
-- No args → print full current config.
+- **No args → interactive menu**: numbered 9-item menu with current values in brackets (language / naming_strategy / name_pool / max_concurrent / warn_threshold / stale_days / context_persistence / protected_worktrees / main_worktree). Pick a number → sub-menu → save → return. `0` or Enter → exit. Persist to `<main_worktree>/.ddaro/config.json` immediately (no restart).
+- `show` → print full current config without menu.
 - `init` → relaunch initial setup wizard (5-step prompt).
 - `main <path>` → change main worktree.
 - `protect <path>` → add path to protected list.
@@ -18,10 +19,11 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:config [ac
 - `language <english|korean>` → output language.
 - `context <true|false>` → context persistence toggle.
 - `max <N>` → max concurrent worktrees.
-- `main_protection <off|warn|strict>` → toggle the hook-based main guard.
+- `main_protection <off|warn|strict>` → toggle the hook-based main guard. **First-time setup (`/ddaro:start`) already prompts for this and defaults to `strict`** — this command is for changing it later.
   - Writes the `main_protection` key in `.ddaro/config.json`.
   - If moving from `off` → `warn`/`strict`: preview the `.claude/settings.json` hook entries and prompt y/n/x. `y` merges entries (preserving the user's existing hooks via a sentinel marker); `n` prints the JSON for manual paste; `x` cancels.
   - If moving from `warn`/`strict` → `off`: remove only the ddaro-tagged entries from `.claude/settings.json`. Leave other hooks untouched.
+  - Bypass a single command even in strict mode: `ALLOW_MAIN_DIRECT=1 <your command>`. `git merge` is always allowed (main's job is to receive merges). Files matching `planning_patterns` (default: `.planning/**`, `.gsd/**`, `CHANGELOG.md`, `STATE.md`, `ROADMAP.md`, `.claude/**`) are always allowed.
 - Unknown action → list valid actions.
 
 Removals and other fine-grained edits → edit config file manually (safety).

@@ -31,7 +31,8 @@ You fire up Session A to fix billing and Session B to refactor auth. Both edit `
 - **Parallel Claude Code sessions** - fastest way to stop them clobbering each other's edits
 - **Risky refactors** - scratch worktree with auto-push on every commit, so a crash or a bad idea cannot eat the work
 - **Long-running experimental branches** - each worktree carries a topic + lock file, so you remember what each was for even after a week
-- **Crash-prone workflows** - plain-text context snapshots to disk after every commit; `/ddaro:summary` rebuilds the picture in one command
+- **Crash-prone workflows** - plain-text context snapshots to disk after every commit; `/ddaro:resume` rebuilds the picture in one command
+- **Interruption-heavy days (hotfix while feature in flight)** - feature worktree stays untouched while you spawn a separate hotfix worktree, merge it, and resume the feature with its full context restored
 
 ## Sibling tools (same marketplace)
 
@@ -76,14 +77,12 @@ Restart Claude Code after install/update.
 | `/ddaro:start [name]` | Create a new worktree + branch + lock |
 | `/ddaro:commit [msg]` | Stage all, classify deletions, confirm flagged, commit, push, write context MD |
 | `/ddaro:merge` | Pre-flight conflict check, size-based review, merge, y/n cleanup |
-| `/ddaro:status` | Current worktree's state (branch, commits, push, lock match) |
-| `/ddaro:list` | All ddaro-owned worktrees with technical summary |
-| `/ddaro:summary [name]` | Read-only content recap |
-| `/ddaro:resume` | Pick a worktree + recap + cd + paste prompt (crash recovery / days-later return) |
-| `/ddaro:clear [name]` | Delete merged worktrees post-hoc (renamed from `/ddaro:clean` in v0.1.2) |
-| `/ddaro:abandon <name>` | 3-layer guarded force-discard |
-| `/ddaro:setting` | Interactive settings menu |
-| `/ddaro:config [key]` | Direct config access |
+| `/ddaro:status` | In-worktree: local state. In main: auto-delegates to `/ddaro:list`. |
+| `/ddaro:list` | All worktrees grouped by tier (owned / adopted / unmanaged / protected / external) |
+| `/ddaro:resume [name] [--recap-only] [--all]` | Pick a worktree + recap + cd + paste prompt. `--recap-only` = read-only summary (replaces old `/ddaro:summary`). |
+| `/ddaro:clear [name]` | Delete merged worktrees post-hoc (the single cleanup path — must run from main) |
+| `/ddaro:abandon <name> [--force]` | 3-layer guarded force-discard. `--force` required for adopted targets. |
+| `/ddaro:config [key] [value]` | No args → interactive menu. With args → direct key set. Also toggles main_protection hook. |
 
 Also callable as `/ddaro <subcommand>`.
 
@@ -94,27 +93,28 @@ Also callable as `/ddaro <subcommand>`.
 - **Physical isolation** - each task gets its own git worktree in its own folder. Parallel Claude sessions cannot collide.
 - **Deletion-aware commits** - classifies diff deletions (replace / format / pure / function-level / >100 lines) and prompts only when destructive.
 - **Size-based merge handling** - small / medium / large diffs each get progressively stricter deletion scans. Cross-plugin review (`--review=triad` or `--review=prism`) is opt-in only and requires the named plugin to be installed. ddaro never calls another plugin automatically.
-- **Crash-recoverable context** - every commit writes `.ddaro/context/<sha>.md` and refreshes `CURRENT.md`. After a session or IDE crash, `/ddaro:summary` rebuilds the full picture.
+- **Crash-recoverable context** - every commit writes `.ddaro/context/<sha>.md` and refreshes `CURRENT.md`. After a session or IDE crash, `/ddaro:resume` (or `/ddaro:resume --recap-only` for read-only) rebuilds the full picture.
 - **3-layer protection** against accidental destruction:
   - Layer 1: `protected_worktrees` config list
   - Layer 2: `.ddaro/OWNED` ownership flag
   - Layer 3: typed `yes, I'm sure` confirmation for `abandon`
-- **Configurable naming** - numbers by default, or swap to animals / Korean cities / US states / fruit / Greek letters via `/ddaro:setting`.
+- **Configurable naming** - numbers by default, or swap to animals / Korean cities / US states / fruit / Greek letters via `/ddaro:config`.
 - **Bilingual** - all output in English (default) or Korean via config.
 
 ---
 
 ## Configuration
 
-First `/ddaro:start` triggers a 5-step setup:
+First `/ddaro:start` triggers a 6-step setup:
 
 1. Language (english / korean)
 2. Main worktree (which folder ddaro must not touch)
 3. Protected worktrees (other folders to leave alone)
 4. Naming strategy (`d-number` / `d-pool` / `ddaro-number` / `ddaro-pool`)
 5. Name pool (`korea_city` / `animal` / `us_state` / `fruit` / `greek`)
+6. **Main protection** (`strict` default / `warn` / `off`) — installs a PreToolUse hook in `.claude/settings.json` that blocks direct `git commit` / `Edit` / `Write` on main. `git merge` stays allowed (main's job is to receive merges). Files in `planning_patterns` (`.planning/**`, `.gsd/**`, `CHANGELOG.md`, `STATE.md`, `ROADMAP.md`, `.claude/**`) also pass through. One-shot bypass: `ALLOW_MAIN_DIRECT=1 <cmd>`.
 
-Change later via `/ddaro:setting` (interactive menu) or `/ddaro:config <key> <value>`.
+Change later via `/ddaro:config` (no args → interactive menu, or `/ddaro:config <key> <value>` for direct set). Toggle the guard specifically: `/ddaro:config main_protection <off|warn|strict>`.
 
 Config file: `<main-worktree>/.ddaro/config.json`.
 
@@ -142,12 +142,47 @@ Config file: `<main-worktree>/.ddaro/config.json`.
 # → PR path or local merge
 # → y/n to cleanup worktree
 
-# Later, after a crash:
-cd myapp-d-billing-fix
-claude
-/ddaro:summary
-# → Full recap: what was done, where you stopped, next recommended
+# Later, after a crash (from main, picker-driven):
+/ddaro:resume
+# → numbered picker → pick billing-fix → prints cd + paste block + full recap
+
+# Or if you already know which one: read-only recap, no cd:
+/ddaro:resume billing-fix --recap-only
+# → what was done, where you stopped, next recommended
 ```
+
+### Interruption: hotfix while a feature is in flight
+
+A common pattern — you're deep in a refactor and a production bug lands. Instead of stashing and branch-hopping, spawn a second worktree:
+
+```
+# Session A is already running /ddaro:start payment-refactor with ~12 commits
+# on top. Don't touch it. From your main worktree terminal:
+
+cd <main>
+/ddaro:start hotfix-login-502
+# → creates project-d-hotfix-login-502, separate folder, separate branch
+
+cd <project>-d-hotfix-login-502
+claude
+# ... 10-minute fix ...
+
+/ddaro:commit "fix: 502 on Safari login"
+/ddaro:merge --local
+# → fast local merge into main, skips PR
+
+cd <main>
+/ddaro:clear hotfix-login-502
+# → branch deleted locally + remote, worktree removed
+
+# Now resume the feature you were in:
+cd <project>-d-payment-refactor
+claude
+/ddaro:resume
+# → recap of the 12-commit state, next step, paste-ready prompt
+```
+
+No new command is needed — the "hotfix" flow is just the normal pipeline (`start` → `commit` → `merge --local` → `clear`) applied in parallel to your in-flight worktree. The feature worktree is never touched while you fix production.
 
 ---
 

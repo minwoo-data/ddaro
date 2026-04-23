@@ -4,6 +4,39 @@ All notable changes to this plugin are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-23
+
+Surface-area pruning + opinionated first-time setup. This is a minor-breaking release: two subcommands are removed in favor of flags on existing ones, and the `/ddaro:start` first-run flow is opinionated enough to warrant a minor bump. Legacy aliases still route, so existing muscle memory prints a one-line deprecation and then works.
+
+### Added
+
+- **First-time `/ddaro:start` is now a 6-step setup.** Step 0 explicitly asks "is `<cwd>` your main worktree?" — if the user says no (or gives a different path), config is saved pointing at that path and the command refuses to create a worktree from the wrong cwd. This eliminates the "oops I ran start from the parent folder and now ddaro thinks /home is main" foot-gun. Step 6 prompts for `main_protection` with **strict as the default** — Enter installs the hooks immediately.
+- **`main_protection` is opt-out instead of opt-in.** New users get the hook by default; the prompt is a one-line Enter to accept. Previous 0.2.x behaviour (off by default) survives via `off` choice.
+- **`/ddaro:status` auto-delegates to `/ddaro:list` when cwd is main.** Previously it refused and suggested `/ddaro:list` as a separate command; now it just runs the inventory view inline. Worktree-local behaviour unchanged.
+- **`/ddaro:abandon <name> --force` now accepts adopted (Tier 2) targets.** Previously refused with a raw-git recipe; now the same 3-layer confirmation flow handles adopted with an "ADOPTED target — original_branch: <...>" banner in the preview. `--force` is required (extra guard since the branch usually pre-exists the adopt). `--delete-remote` opts into remote branch deletion.
+- **`/ddaro:resume [name] [--recap-only] [--all]`** now covers Tier 2 (adopted) worktrees too, supports positional `<name>` for direct resume, and folds in the former `/ddaro:summary` logic via `--recap-only`.
+- **`/ddaro:config` with no args opens the interactive 9-item menu** (the behaviour previously split into `/ddaro:setting`). `/ddaro:config show` prints full config without the menu. `/ddaro:config <key> <value>` direct set is unchanged.
+- **Hotfix example session** documented in README (EN + KO): feature worktree in flight → spawn isolated hotfix worktree → `merge --local` → `clear` → `/ddaro:resume` back into the feature with full context restored. No new command — just the normal pipeline applied in parallel.
+
+### Changed
+
+- **`/ddaro` dispatcher subcommand list** trimmed. `summary` and `setting` still route through as legacy aliases (`summary` → `resume --recap-only`, `setting` → `config`) with a one-line deprecation notice, then execute.
+
+### Removed
+
+- **`/ddaro:summary` command file** (`commands/ddaro-summary.md`). Its logic is inline in `/ddaro:resume` and callable via `--recap-only`. Legacy `/ddaro summary ...` still routes.
+- **`/ddaro:setting` command file** (`commands/ddaro-setting.md`). The menu is now what `/ddaro:config` does with no args. Legacy `/ddaro setting` still routes.
+
+### Migration notes
+
+- Users upgrading from 0.2.x: no config migration. `main_protection` defaults to whatever was already in `config.json`; new installs get `strict`.
+- Scripts or muscle memory using `/ddaro:summary` or `/ddaro:setting` directly (namespaced forms) will 404 — switch to `/ddaro:resume --recap-only` and `/ddaro:config` respectively. The `/ddaro <sub>` dispatcher form still accepts both as aliases for one more version.
+- `/ddaro:abandon <name>` on an adopted worktree no longer prints a raw-git recipe — it asks for `--force`.
+
+### Known follow-ups
+
+- `skills/ddaro/SKILL.md` still needs the body sections for `## /ddaro:start`, `## /ddaro:resume`, `## /ddaro:abandon`, and `## /ddaro:config` synced to the new command-file spec. Command-file descriptions are authoritative for routing; SKILL.md is the behaviour contract and will be updated in a follow-up.
+
 ## [0.2.5] - 2026-04-23
 
 Metadata hygiene release. No behaviour changes — just brings shipped metadata in sync with the actual 0.2.x feature set and drops internal artifacts that shouldn't have been in the published tree.

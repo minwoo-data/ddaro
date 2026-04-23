@@ -31,7 +31,8 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 - **병렬 Claude Code 세션** - 세션들이 서로 편집을 덮어쓰는 것을 막는 가장 빠른 방법
 - **위험한 리팩터링** - 임시 worktree에서 매 commit마다 auto-push 되어, 크래시나 잘못된 판단이 작업물을 먹을 수 없음
 - **장기 실험 브랜치** - 각 worktree가 topic + lock 파일을 들고 있어 일주일 뒤에도 "이 브랜치가 뭐였지"가 명확
-- **크래시가 잦은 환경** - 매 commit 후 plain-text context를 디스크에 기록. `/ddaro:summary` 한 번이면 전체 그림 복원.
+- **크래시가 잦은 환경** - 매 commit 후 plain-text context를 디스크에 기록. `/ddaro:resume` 한 번이면 전체 그림 복원.
+- **끼어드는 작업이 잦은 날 (feature 중 hotfix)** - feature worktree 는 그대로 두고 별도 hotfix worktree 로 수정 → merge → feature 로 `/ddaro:resume` 복귀. context 는 유지.
 
 ## 자매 도구 (같은 마켓플레이스)
 
@@ -76,14 +77,12 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 | `/ddaro:start [name]` | 새 worktree + branch + lock 생성 |
 | `/ddaro:commit [msg]` | 전체 stage, 삭제 검증, 확인, commit, push, context MD 기록 |
 | `/ddaro:merge` | 충돌 사전 확인, 규모별 리뷰, merge, y/n 정리 |
-| `/ddaro:status` | 현재 worktree 상태 (branch, commits, push, lock) |
-| `/ddaro:list` | ddaro 소유 worktree 전체 기술 요약 |
-| `/ddaro:summary [name]` | 읽기 전용 내용 요약 |
-| `/ddaro:resume` | worktree 선택 + 요약 + cd + paste prompt (크래시 복구 / 며칠 뒤 재개) |
-| `/ddaro:clear [name]` | merge 된 worktree 사후 정리 (v0.1.2에서 `/ddaro:clean`에서 rename) |
-| `/ddaro:abandon <name>` | 3겹 보호 후 완전 폐기 |
-| `/ddaro:setting` | 대화형 설정 메뉴 |
-| `/ddaro:config [key]` | 직접 설정 변경 |
+| `/ddaro:status` | worktree 안에선 로컬 상태, main 에선 `/ddaro:list` 로 자동 위임 |
+| `/ddaro:list` | 모든 worktree 를 tier 별로 그룹핑 (owned / adopted / unmanaged / protected / external) |
+| `/ddaro:resume [name] [--recap-only] [--all]` | worktree 선택 + 요약 + cd + paste prompt. `--recap-only` 는 읽기 전용 (이전 `/ddaro:summary` 대체) |
+| `/ddaro:clear [name]` | merge 된 worktree 사후 정리 (유일한 제거 경로 — main 에서만 실행) |
+| `/ddaro:abandon <name> [--force]` | 3겹 보호 후 완전 폐기. adopted 대상은 `--force` 필수 |
+| `/ddaro:config [key] [value]` | 인자 없으면 대화형 메뉴, 있으면 직접 설정. main_protection 훅도 토글 |
 
 `/ddaro <subcommand>` 형태로도 호출 가능.
 
@@ -99,22 +98,23 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
   - 1층: `protected_worktrees` config 목록
   - 2층: `.ddaro/OWNED` 소유권 플래그
   - 3층: `abandon` 시 `yes, I'm sure` 타이핑 확인
-- **네이밍 전략** - 숫자(기본), 또는 동물 / 한국 도시 / 미국 주 / 과일 / 그리스 문자. `/ddaro:setting` 에서 전환.
+- **네이밍 전략** - 숫자(기본), 또는 동물 / 한국 도시 / 미국 주 / 과일 / 그리스 문자. `/ddaro:config` 메뉴에서 전환.
 - **언어 지원** - 모든 출력이 영어(기본) 또는 한국어. config 로 전환.
 
 ---
 
 ## 설정
 
-첫 `/ddaro:start` 시 5단계 설정:
+첫 `/ddaro:start` 시 6단계 설정:
 
 1. 언어 (english / korean)
 2. Main worktree (ddaro 가 절대 건드리지 않을 폴더)
 3. 보호 목록 (다른 작업용 폴더)
 4. 네이밍 전략 (`d-number` / `d-pool` / `ddaro-number` / `ddaro-pool`)
 5. Name pool (`korea_city` / `animal` / `us_state` / `fruit` / `greek`)
+6. **Main protection** (`strict` 기본 / `warn` / `off`) — `.claude/settings.json` 에 PreToolUse 훅을 심어 main 에서 `git commit` / `Edit` / `Write` 를 차단. `git merge` 는 항상 통과 (main 의 본업은 merge 수신). `planning_patterns` (`.planning/**`, `.gsd/**`, `CHANGELOG.md`, `STATE.md`, `ROADMAP.md`, `.claude/**`) 는 통과. 일회성 bypass: `ALLOW_MAIN_DIRECT=1 <cmd>`.
 
-나중 변경: `/ddaro:setting` (메뉴) 또는 `/ddaro:config <key> <value>`.
+나중 변경: `/ddaro:config` (인자 없으면 메뉴) 또는 `/ddaro:config <key> <value>` (직접 변경). 가드만 토글: `/ddaro:config main_protection <off|warn|strict>`.
 
 Config 파일 위치: `<main-worktree>/.ddaro/config.json`
 
@@ -141,12 +141,47 @@ Config 파일 위치: `<main-worktree>/.ddaro/config.json`
 # → PR 생성 또는 local merge
 # → worktree 정리 y/n
 
-# 나중에 크래시 복구:
-cd myapp-d-billing-fix
-claude
-/ddaro:summary
-# → 뭘 했고 어디서 끊겼고 다음 뭐 할지 전체 복원
+# 나중에 크래시 복구 (main 에서 picker):
+/ddaro:resume
+# → 번호 picker → billing-fix 선택 → cd + paste 블록 + 전체 복원
+
+# 또는 이미 어느 worktree 인지 안다면 (읽기 전용, cd 없음):
+/ddaro:resume billing-fix --recap-only
+# → 뭘 했고 어디서 끊겼고 다음 뭐 할지
 ```
+
+### 끼어들기: feature 진행 중 hotfix
+
+흔한 상황 — 리팩터링 한창인데 prod 버그가 떨어짐. stash + 브랜치 점프 말고 worktree 하나 더 띄우세요:
+
+```
+# Session A 는 /ddaro:start payment-refactor 로 12커밋 쌓인 상태. 건드리지 않음.
+# main worktree 터미널에서:
+
+cd <main>
+/ddaro:start hotfix-login-502
+# → project-d-hotfix-login-502 별도 폴더 + 별도 브랜치 생성
+
+cd <project>-d-hotfix-login-502
+claude
+# ... 10분 수정 ...
+
+/ddaro:commit "fix: Safari 로그인 502"
+/ddaro:merge --local
+# → PR 없이 main 으로 로컬 머지
+
+cd <main>
+/ddaro:clear hotfix-login-502
+# → 브랜치 로컬+원격 삭제, worktree 제거
+
+# 이제 원래 feature 로 돌아가기:
+cd <project>-d-payment-refactor
+claude
+/ddaro:resume
+# → 12커밋 상태 recap + 다음 단계 + paste prompt
+```
+
+새 명령은 필요 없음 — "hotfix" 는 그냥 기존 파이프라인 (`start` → `commit` → `merge --local` → `clear`) 을 진행 중인 worktree 옆에 병렬로 돌린 것뿐. feature worktree 는 prod fix 내내 건드려지지 않음.
 
 ---
 
