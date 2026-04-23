@@ -80,6 +80,7 @@ Restart Claude Code after install/update.
 | `/ddaro:status` | In-worktree: local state. In main: auto-delegates to `/ddaro:list`. |
 | `/ddaro:list` | All worktrees grouped by tier (owned / adopted / unmanaged / protected / external) |
 | `/ddaro:resume [name] [--recap-only] [--all]` | Pick a worktree + recap + cd + paste prompt. `--recap-only` = read-only summary (replaces old `/ddaro:summary`). |
+| `/ddaro:adopt <path>` | Bring an existing non-ddaro worktree under ddaro management (plants `.ddaro/` overlay, marks `adopted=true`). |
 | `/ddaro:clear [name]` | Delete merged worktrees post-hoc (the single cleanup path — must run from main) |
 | `/ddaro:abandon <name> [--force]` | 3-layer guarded force-discard. `--force` required for adopted targets. |
 | `/ddaro:config [key] [value]` | No args → interactive menu. With args → direct key set. Also toggles main_protection hook. |
