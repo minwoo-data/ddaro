@@ -1,7 +1,7 @@
 ---
 name: ddaro
-description: "Worktree-based parallel workflow. Create isolated worktree + branch, commit with deletion-aware checks, review and merge to main by diff size, recover from session/IDE crashes via per-commit context MD. Subcommands: start / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
-version: "0.2.1"
+description: "Worktree-based parallel workflow. Create isolated worktree + branch, adopt existing worktrees, commit with deletion-aware checks, review and merge to main by diff size, recover from session/IDE crashes via per-commit context MD. Subcommands: start / adopt / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
+version: "0.2.4"
 author: "haroom"
 repository: "https://github.com/minwoo-data/ddaro"
 license: "MIT"
@@ -46,19 +46,113 @@ First-time users: `/ddaro:start` walks you through the 5-step setup on first inv
 
 ---
 
+## Worktree tiers
+
+Not every folder git reports as a worktree belongs to ddaro. ddaro classifies every worktree it sees into one of six tiers, and each tier has its own permission set. This is how ddaro coexists with main, with long-lived feature worktrees, with GSD, and with Claude Code agent worktrees - without stomping on any of them.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Tier 0: main                   (config.main_worktree)           │
+│   Receiver of merges + canonical state. ddaro never mutates it. │
+├─────────────────────────────────────────────────────────────────┤
+│ Tier 1: ddaro-owned            (.ddaro/OWNED, adopted=false)    │
+│   Created by /ddaro:start. Full life cycle under ddaro.         │
+├─────────────────────────────────────────────────────────────────┤
+│ Tier 2: adopted                (.ddaro/OWNED, adopted=true)     │
+│   External worktree brought under ddaro via /ddaro:adopt.       │
+│   Same commands as owned EXCEPT /ddaro:abandon is refused.      │
+├─────────────────────────────────────────────────────────────────┤
+│ Tier 3: protected              (config.protected_worktrees)     │
+│   User-declared "do not touch". ddaro shows read-only only.     │
+├─────────────────────────────────────────────────────────────────┤
+│ Tier 4: unmanaged              (no .ddaro, not in config)       │
+│   Visible via /ddaro:list, but ddaro never acts on it until     │
+│   the user adopts or removes it manually.                       │
+├─────────────────────────────────────────────────────────────────┤
+│ Tier 5: external               (config.external_patterns)       │
+│   Owned by other tools (e.g. `.claude/worktrees/agent-*`).      │
+│   ddaro ignores these entirely.                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Classification algorithm
+
+ddaro classifies a worktree path in this priority order (first match wins):
+
+1. `path == config.main_worktree`                     → **main**
+2. `path` matches any glob in `config.external_patterns` → **external**
+3. `path` is in `config.protected_worktrees`          → **protected**
+4. `<path>/.ddaro/OWNED` exists
+   - `LOCK.adopted == true`                            → **adopted**
+   - else                                              → **ddaro-owned**
+5. else                                                → **unmanaged**
+
+Ordering matters: a stray `.ddaro/OWNED` file in the main worktree does not grant ddaro access to main, because the main check runs first. Likewise, an unmanaged worktree can be protected by simply adding it to `protected_worktrees`.
+
+### Permission matrix
+
+| Command                 | main | owned | adopted | protected | unmanaged | external |
+|-------------------------|------|-------|---------|-----------|-----------|----------|
+| `/ddaro:start` (create) | n/a  | n/a   | n/a     | reject    | n/a       | reject   |
+| `/ddaro:adopt`          | ✗    | ✗     | ✗       | ✗         | **✓**     | ✗        |
+| `/ddaro:commit`         | ✗    | ✓     | ✓       | ✗         | ✗         | ✗        |
+| `/ddaro:merge`          | ✗    | ✓     | ✓       | ✗         | ✗         | ✗        |
+| `/ddaro:clear`          | ✗    | ✓     | ✓       | ✗         | ✗         | ✗        |
+| `/ddaro:abandon`        | ✗    | ✓     | **✗**   | ✗         | ✗         | ✗        |
+| `/ddaro:resume`         | ✗    | ✓     | ✓       | ✗         | ✗         | ✗        |
+| `/ddaro:summary`        | n/a  | ✓     | ✓       | n/a       | git-log only | ✗      |
+| `/ddaro:list`           | show | show  | show    | show      | show      | show (optional section) |
+| `/ddaro:status`         | show | ✓     | ✓       | show      | show      | ✗        |
+
+The only meaningful difference between **owned** and **adopted** is `/ddaro:abandon`: ddaro never force-discards a worktree it did not create. For adopted, force removal is the user's call via plain `git worktree remove --force`.
+
+---
+
+## cwd rules (destructive commands)
+
+Destructive commands must be run from the **main worktree**, not from inside the worktree being removed. If ddaro removed a worktree from within itself, the shell's cwd would point at a deleted folder on Linux/macOS, and on Windows the delete would fail outright because the folder is in use.
+
+| Command               | Required cwd                       | On violation |
+|-----------------------|------------------------------------|--------------|
+| `/ddaro:start`        | any                                | — |
+| `/ddaro:adopt`        | any                                | — |
+| `/ddaro:commit`       | the target ddaro/adopted worktree  | lock-check warning |
+| `/ddaro:merge`        | the target ddaro/adopted worktree  | lock-check warning; merge stays here, cleanup is **handed off** to `/ddaro:clear` at main |
+| `/ddaro:clear`        | **`config.main_worktree`**         | refuse + print `cd <main>` and the exact `/ddaro:clear` command to re-run |
+| `/ddaro:abandon`      | **`config.main_worktree`**         | same as clear |
+| `/ddaro:list` / `:status` / `:summary` / `:resume` | any | — |
+
+By forcing clear/abandon to run at main, the "where do I go after the folder disappears?" problem is solved structurally: the user is already in main when the delete happens, so there is no stale cwd.
+
+`/ddaro:merge`'s cleanup prompt follows the same rule. Instead of deleting from inside the target, it prints a hand-off block:
+
+```
+✓ Merge complete.
+
+Cleanup must run from main. Copy-paste:
+
+    cd <main_worktree>
+    /ddaro:clear <branch-or-name>
+```
+
+One removal code path (`/ddaro:clear`) instead of two reduces surface area for bugs.
+
+---
+
 ## Commands (frequency order)
 
 | Command | Purpose | When |
 |---|---|---|
 | `/ddaro:start [name]` | Create worktree + branch + lock | Starting new work |
+| `/ddaro:adopt <path>` | Bring an existing worktree under ddaro management | You already have a non-ddaro worktree and want ddaro's commit/merge/context flow on top |
 | `/ddaro:commit [msg]` | Safe commit + push + context snapshot | After each edit chunk (repeat) |
-| `/ddaro:merge` | Pre-flight check + review + merge + cleanup | Work complete |
+| `/ddaro:merge` | Pre-flight check + review + merge + cleanup hand-off | Work complete |
 | `/ddaro:status` | Current worktree state | Quick check |
-| `/ddaro:list` | All ddaro worktrees, technical state | Overview |
+| `/ddaro:list` | All worktrees, grouped by tier | Overview |
 | `/ddaro:summary [name]` | Content recap from commits + context | Read-only "what did I do?" |
 | `/ddaro:resume` | Pick a worktree + recap + cd + paste prompt | Crash recovery / returning after days |
-| `/ddaro:clear [name]` | Delete merged worktree post-hoc | After `merge` with "keep" choice |
-| `/ddaro:abandon <name>` | 3-layer guarded force-discard | Work went wrong |
+| `/ddaro:clear [name]` | Delete merged worktree post-hoc (run from main) | After `merge` with "keep" choice, or any cleanup |
+| `/ddaro:abandon <name>` | 3-layer guarded force-discard (owned only, run from main) | Work went wrong |
 | `/ddaro:setting` | Interactive settings menu | Browse and change config |
 | `/ddaro:config [key] [val]` | Direct config access | Known key, fast change |
 
@@ -103,12 +197,23 @@ Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config poo
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "main_worktree": "C:\\path\\to\\myapp",
   "project_name": "myapp",
   "protected_worktrees": [
     "C:\\path\\to\\myapp",
     "C:\\path\\to\\myapp-experiments"
+  ],
+  "external_patterns": [
+    ".claude/worktrees/agent-*",
+    ".git/worktrees/*"
+  ],
+  "planning_patterns": [
+    ".planning/**",
+    ".gsd/**",
+    "STATE.md",
+    "ROADMAP.md",
+    "CHANGELOG.md"
   ],
   "max_concurrent": 10,
   "warn_threshold": 5,
@@ -123,21 +228,25 @@ Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config poo
     "greek": ["alpha","beta","gamma","delta","epsilon","zeta","eta","theta","iota","kappa"]
   },
   "language": "english",
-  "context_persistence": true
+  "context_persistence": true,
+  "main_protection": "off"
 }
 ```
 
 ### Field reference
 
-- **`schema_version`**: integer, currently `1`. Required for future migrations; on load, if the value does not match the current schema, ddaro runs a named migration before use.
+- **`schema_version`**: integer, currently `2` (was `1` in v0.2.1; v0.2.4 adds `external_patterns`, `planning_patterns`, `main_protection`). On load, if the value does not match the current schema, ddaro runs a named migration before use.
 - **`main_worktree`**: absolute path to the clean main-branch worktree. ddaro never mutates this.
-- **`protected_worktrees`**: paths ddaro will refuse to create in or delete. Auto-populated during init setup plus sibling folders user flags.
+- **`protected_worktrees`**: paths ddaro will refuse to create in or delete. Auto-populated during init setup plus sibling folders user flags. Defines **Tier 3**.
+- **`external_patterns`** *(new in 0.2.4)*: glob patterns for worktrees owned by other tools (e.g. Claude Code agent worktrees). ddaro ignores these entirely. Defines **Tier 5**.
+- **`planning_patterns`** *(new in 0.2.4)*: globs used by `/ddaro:start` Step 5 to classify dirty-main files as "planning/state" vs "code" and offer targeted options. Does not affect commit rules elsewhere.
 - **`max_concurrent`**: hard ceiling. `/ddaro:start` rejects beyond this.
 - **`warn_threshold`**: soft warning at this count.
 - **`stale_days`**: `/ddaro:list` marks worktrees older than this as `STALE`.
 - **`naming_strategy`** + **`name_pool`**: control auto-generated names.
 - **`language`**: `english` (default) or `korean`. Affects all subcommand output.
 - **`context_persistence`**: `true` (default) writes `.ddaro/context/*.md` per commit.
+- **`main_protection`** *(new in 0.2.4)*: `off` (default), `warn`, or `strict`. Controls whether hooks block direct mutation of the main worktree. See "Main protection hooks" below.
 
 If config is missing, **the first `/ddaro:start` triggers the 5-step setup prompt**.
 
@@ -163,12 +272,107 @@ ddaro only plants this file in worktrees it created. **Absent → not a cleanup 
 - Using `git reset --hard` or `git branch -D` outside `/ddaro:abandon`
 - Committing 100+ pure-deletion lines without user confirmation
 - Auto-deleting remote branches without explicit prompt
+- **Removing a worktree while cwd is inside it** — `/ddaro:clear` / `:abandon` refuse unless cwd is main, and `/ddaro:merge` hands off cleanup to `/ddaro:clear` rather than deleting from inside the target
+
+---
+
+## Main protection hooks *(opt-in, new in 0.2.4)*
+
+"ddaro never touches main" has historically been a **convention** enforced only by ddaro's own commands. A user (or a parallel Claude Code session) can still run plain `git commit` in the main worktree and break the invariant. `main_protection` promotes the convention to a tool-level guard using Claude Code hooks.
+
+### Levels
+
+| Level | SessionStart | PreToolUse (Edit/Write on main) | PreToolUse (Bash `git commit` on main) | Bypass |
+|---|---|---|---|---|
+| `off` (default) | silent | allow | allow | n/a |
+| `warn` | show "you are in main" notice with tier summary | allow + log to stderr | allow + log to stderr | n/a |
+| `strict` | show notice + hard reminder | **block** (except paths matching `planning_patterns`, `.claude/**`) | **block** (unless `ALLOW_MAIN_DIRECT=1`) | set env `ALLOW_MAIN_DIRECT=1` for one command |
+
+Never blocks: `git merge`, `git pull`, `gh pr merge`, read-only tools, paths under `planning_patterns`.
+
+### Hook scripts
+
+Shipped inside the plugin at `${CLAUDE_PLUGIN_ROOT}/hooks/`:
+
+- `session-start-notice.py` — SessionStart; prints the "you are in main" banner + tier summary if cwd matches `config.main_worktree` and level is `warn`/`strict`.
+- `check-main-edit.py` — PreToolUse matching `Edit|Write|NotebookEdit`; blocks writes to files under `config.main_worktree` unless the relative path matches `planning_patterns` or level is `off`/`warn`.
+- `check-main-bash.py` — PreToolUse matching `Bash`; blocks tool_input commands that look like `git commit` (including `git commit --amend`, `git commit --fixup`) targeting main, unless `ALLOW_MAIN_DIRECT=1` is set.
+
+All three are Python scripts (stdlib only) for cross-platform portability. If Python is unavailable, the hooks fail open (log to stderr, allow action) - never fail closed.
+
+### Enabling
+
+```bash
+cd <main_worktree>
+/ddaro:config main_protection warn      # or strict
+```
+
+ddaro responds with a preview of the `.claude/settings.json` entries it will add and asks y/n:
+
+```
+/ddaro:config main_protection strict will add these entries to
+  .claude/settings.json:
+
+  {
+    "hooks": {
+      "SessionStart": [{
+        "hooks": [{"type": "command",
+                   "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/session-start-notice.py"}]
+      }],
+      "PreToolUse": [
+        {
+          "matcher": "Edit|Write|NotebookEdit",
+          "hooks": [{"type": "command",
+                     "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-main-edit.py"}]
+        },
+        {
+          "matcher": "Bash",
+          "hooks": [{"type": "command",
+                     "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-main-bash.py"}]
+        }
+      ]
+    }
+  }
+
+  Settings file: C:/.../.claude/settings.json
+  Bypass:        ALLOW_MAIN_DIRECT=1 <command>
+
+    y - merge entries into settings.json (preserves existing entries)
+    n - print the JSON for manual paste
+    x - cancel
+
+  [y/n/x]:
+```
+
+Disabling: `/ddaro:config main_protection off` removes the ddaro-owned entries from `.claude/settings.json` (entries are tagged with a sentinel comment so ddaro can find them later). Other users' hook entries stay untouched.
+
+### Helpful refusal
+
+When a hook blocks an action, it prints the reason plus at least one way forward — never a terse "denied". Example for blocked `git commit` in main:
+
+```
+🛑 Blocked by ddaro main_protection=strict.
+   You are in: C:/.../receipt_processor (main worktree).
+   Direct commits on main are refused.
+
+   Options:
+     1) Commit in a ddaro worktree and merge:
+          cd C:/.../receipt_processor-d-busan
+          /ddaro:commit "<msg>"
+          /ddaro:merge
+     2) One-shot bypass (audit-visible):
+          ALLOW_MAIN_DIRECT=1 git commit -m "<msg>"
+     3) Disable strict protection:
+          /ddaro:config main_protection off
+```
 
 ---
 
 ## Lock File & Context Directory
 
 ### Lock (`<worktree>/.ddaro/LOCK`)
+
+**ddaro-owned (Tier 1)** — default shape:
 
 ```json
 {
@@ -180,14 +384,31 @@ ddaro only plants this file in worktrees it created. **Absent → not a cleanup 
 }
 ```
 
+**adopted (Tier 2)** — same fields plus three adoption markers:
+
+```json
+{
+  "branch": "feat/phase-15-v28b-pending-ui",
+  "topic": "user-supplied topic string or slug",
+  "created_at": "2026-04-23T10:00:00",
+  "main_worktree": "C:\\path\\to\\myapp",
+  "language": "english",
+  "adopted": true,
+  "original_branch": "feat/phase-15-v28b-pending-ui",
+  "adopted_at": "2026-04-23T10:00:00"
+}
+```
+
+Backward compatibility: LOCK files written by v0.2.x without the `adopted` field are read as `adopted: false`. No migration required.
+
 Every subcommand validates `current branch == lock.branch`. On mismatch, it prints the discrepancy, prompts y/n, and defaults to abort. This catches the user having manually switched branches inside a ddaro worktree.
 
 ### Context Directory (`<worktree>/.ddaro/`)
 
 ```
 <worktree>/.ddaro/
-├── OWNED                                      # empty flag - proves ddaro created this worktree
-├── LOCK                                       # branch/topic/created_at/language JSON
+├── OWNED                                      # empty flag - proves ddaro manages this worktree
+├── LOCK                                       # JSON; adopted=true for Tier 2
 ├── CURRENT.md                                 # latest running state, overwritten each commit
 └── context/
     ├── 2026-04-23T10-00-00-a1b2c3d.md        # commit 1 snapshot
@@ -260,13 +481,19 @@ If this session restarts:
 ## /ddaro:start [name]
 
 1. **Config check**: if `.ddaro/config.json` missing, run initial 5-step setup (language → main worktree → protected list → naming strategy → name pool).
-2. **Existing-worktree scan**: if any ddaro-owned worktrees already exist, offer to resume one instead of creating new:
+2. **Existing-worktree scan**: list all worktrees grouped by tier so the user can pick an existing path instead of creating a new one:
    ```
    ⚠ Existing ddaro worktrees:
      1) new worktree (default)
      2) resume d-fox      (2h ago, 3 commits, uncommit)
      3) resume d-billing  (1d ago, pushed, ready to merge)
      4) cancel
+
+   ⚠ Unmanaged worktrees detected (NOT carried over by /ddaro:start):
+     • receipt_processor-ui  [feat/phase-15-pending]  (14 commits, 2 uncommit)
+         a) Finish in place — cd there, commit/push/merge, remove manually
+         b) Adopt into ddaro — /ddaro:adopt <path>
+         c) Ignore and start fresh (default — these stay as-is)
    ```
 
    > Tip: if you already know you want to re-enter an existing worktree (e.g. after a crash or a days-later return), `/ddaro:resume` is the direct path - it generates a recap + cd + paste prompt in one step.
@@ -275,7 +502,25 @@ If this session restarts:
    - If user supplied `<name>` → slugify + collision check
    - Else → auto-generate per `naming_strategy` + `name_pool`
    - Collision → append `-2`, `-3`
-5. **Main-worktree state check**: if main is dirty, warn and confirm before proceeding.
+5. **Main-worktree state check**: if main is dirty, classify uncommitted files into planning-like vs code and offer targeted options before proceeding. Planning-like = anything matching `config.planning_patterns` (default: `.planning/**`, `.gsd/**`, `STATE.md`, `ROADMAP.md`, `CHANGELOG.md`).
+   ```
+   ⚠ Main worktree is dirty. These will NOT carry into the new ddaro worktree:
+
+     Planning / state (often important — GSD, docs):
+       .planning/STATE.md        (15 lines)
+       .planning/intel/runtime.md (new file)
+
+     Code:
+       src/app.py                (3 lines)
+
+     Options:
+       1) Commit all, then start ddaro            (recommended)
+       2) Commit only planning/state files        (code stays uncommitted)
+       3) Cherry-pick specific files after start  (manual cp)
+       4) Start anyway — lose these in new worktree
+       5) Cancel
+   ```
+   Only planning-like files carrying over is the typical desire (GSD state, refs). Code changes usually belong in the ddaro branch itself, so leaving them in main is rarely what the user wants — option 1 is default.
 6. **Create worktree** (path is always anchored to `main_worktree`, never cwd - worktree is created as a sibling of `main_worktree`):
    ```bash
    git -C <main_worktree> worktree add \
@@ -302,6 +547,89 @@ If this session restarts:
      Continue work on d-<name>. topic: <describe>
      ──────────────────────────────────
    ```
+
+---
+
+## /ddaro:adopt <path>
+
+Bring an existing non-ddaro worktree under ddaro management. Use this when you already have a worktree (made by `git worktree add`, inherited from a teammate, created by another tool) and you want ddaro's commit/merge/context flow to apply to it - **without moving any code, without renaming the branch, without recreating anything**.
+
+### What adopt does and does not do
+
+| Does | Does not |
+|---|---|
+| Plant `<path>/.ddaro/OWNED`, `LOCK`, `context/`, `CURRENT.md` | Rename the branch |
+| Mark `LOCK.adopted = true` + record `original_branch` | Change file contents |
+| Record the existing branch as the adopted branch | Move the worktree path |
+| Prompt for a topic | Create a new worktree or branch |
+| Add `.ddaro/` to `.gitignore` if missing | Run any git operation |
+
+### Refusal conditions
+
+ddaro refuses adoption if the target path is:
+- **main worktree** (`config.main_worktree`)
+- In `config.protected_worktrees`
+- Matched by any glob in `config.external_patterns` (e.g. `.claude/worktrees/agent-*` - owned by other tools)
+- Already has `<path>/.ddaro/OWNED` (already ddaro or adopted)
+
+The refusal prints why plus what the user can do instead (unprotect, or just keep using it outside ddaro).
+
+### Flow
+
+1. **Path validation**: must be a real `git worktree list` entry. If not, stop with an error.
+2. **Tier check**: classify and refuse per the list above. Print the tier and remediation.
+3. **State snapshot**: inspect the target and show a summary:
+   ```
+   Target:        C:/.../receipt_processor-ui
+   Branch:        feat/phase-15-v28b-pending-ui   (kept as-is)
+   Commits ahead of main: 14
+   Uncommitted:   2 files
+   Pushed:        origin/feat/phase-15-v28b-pending-ui up to date
+   ```
+4. **Topic prompt**: short description for `LOCK.topic` and `CURRENT.md`. User-typed, not auto-generated.
+5. **Plant ddaro files**:
+   - `mkdir <path>/.ddaro/context/`
+   - `touch <path>/.ddaro/OWNED`
+   - Write `<path>/.ddaro/LOCK`:
+     ```json
+     {
+       "branch": "feat/phase-15-v28b-pending-ui",
+       "topic": "<user-supplied>",
+       "created_at": "<now>",
+       "main_worktree": "C:/.../receipt_processor",
+       "language": "english",
+       "adopted": true,
+       "original_branch": "feat/phase-15-v28b-pending-ui",
+       "adopted_at": "<now>"
+     }
+     ```
+   - Append `.ddaro/` to `<main_worktree>/.gitignore` if absent (same one-time rule as `/ddaro:start`).
+   - Write initial `<path>/.ddaro/CURRENT.md` noting "adopted from external worktree".
+6. **Output summary**:
+   ```
+   ✓ Adopted: C:/.../receipt_processor-ui
+     Branch:     feat/phase-15-v28b-pending-ui   (kept as-is)
+     Status:     14 commits ahead of main, 2 uncommit
+     Topic:      <topic>
+
+   From now on you can use: /ddaro:commit, /ddaro:merge, /ddaro:resume, /ddaro:clear
+
+   Note: /ddaro:abandon is refused for adopted worktrees. To force-discard,
+   use plain git from main:
+     cd <main_worktree>
+     git worktree remove --force <path>
+     git branch -D <branch>
+   ```
+
+### End-of-life — adopted converges on `/ddaro:clear`
+
+An adopted worktree finishes the same way a ddaro-owned one does:
+
+```
+adopt → commit (repeat) → merge → clear
+```
+
+`/ddaro:merge` and `/ddaro:clear` treat owned and adopted identically. The single difference is `/ddaro:abandon` - adopted is refused there, because ddaro never force-destroys something it did not create.
 
 ---
 
@@ -390,21 +718,27 @@ Work complete, time to ship.
        git merge d-<name>
        git push
      ```
-10. **Post-merge cleanup prompt**:
+10. **Post-merge cleanup hand-off** (the merge never deletes its own worktree - see "cwd rules"):
     ```
     ✓ Merge complete: d-<name> → main (K commits, +X -Y)
     ✓ Pushed to remote
-    
-    Clean up worktree <path>?
-      y (default) - delete branch + worktree (and .ddaro/context)
-      n           - keep (further edits possible; `/ddaro:clear` later)
-    
+
+    Cleanup must run from the main worktree (this worktree is about to be removed).
+      y (default) - print the copy-paste block to finish in main
+      n           - keep everything for now; run /ddaro:clear later
+
     y/n [y]:
     ```
-11. **`y` path**:
-    - `git branch -d d-<name>` (safe; refuses if unmerged)
-    - `git push origin --delete d-<name>`
-    - `git worktree remove <path>` (context dir disappears with it)
+11. **`y` path — hand-off block** (no delete is executed here):
+    ```
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Run this in your shell:
+
+        cd <main_worktree>
+        /ddaro:clear <branch-or-name>
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ```
+    Why hand-off instead of direct delete: on Windows, `git worktree remove` fails when cwd is inside the target. On Linux/macOS it succeeds but leaves the shell pointing at a vanished path. Removing the worktree only from main (via `/ddaro:clear`) avoids both problems and means there is exactly one code path that deletes worktrees.
 
 > **Archive option**: you may copy `.ddaro/context/` into `<main>/.ddaro/archive/d-<name>/` before removal. Default behavior skips archiving - commit log is the canonical history.
 
@@ -412,12 +746,42 @@ Work complete, time to ship.
 
 ## /ddaro:clear [name]
 
-Clean up ddaro worktrees whose branches are already merged to main. (Renamed from `/ddaro:clean` in v0.1.2; the deprecated alias was removed in v0.2.0.)
+Clean up ddaro-owned or adopted worktrees whose branches are already merged to main. This is the **single code path** that actually removes a worktree - `/ddaro:merge` only hands off to it. (Renamed from `/ddaro:clean` in v0.1.2; the deprecated alias was removed in v0.2.0.)
 
-1. No name → list all merged ddaro-owned worktrees as candidates.
-2. Confirm via `git branch --merged main`.
-3. Unmerged → refuse; suggest `/ddaro:merge` first or `/ddaro:abandon` to force-discard.
-4. Merged → `git branch -d`, `git push origin --delete`, `git worktree remove`.
+**Precondition — must run from main**:
+
+```
+if cwd != config.main_worktree:
+    print helpful refusal:
+      ✗ /ddaro:clear must run from the main worktree.
+        Current cwd: <cwd>
+        Main:        <main_worktree>
+
+        Run this first:
+          cd <main_worktree>
+
+        Then re-run:
+          /ddaro:clear <name>
+    exit
+```
+
+This rule makes "where does the shell end up after the target vanishes?" a non-issue: the user is already in main when the delete happens.
+
+### Flow
+
+1. **cwd check** (above). Refuse with cd instructions if not in main.
+2. **Target resolution**:
+   - No name → list all merged ddaro-owned + adopted worktrees as candidates, let the user pick.
+   - Name given → resolve to a single worktree (match against `LOCK.branch` or worktree folder name).
+3. **Merge confirmation**: `git branch --merged main` must list the target's branch. If not:
+   - Unmerged → refuse; suggest `/ddaro:merge` first, or `/ddaro:abandon` (owned only) / plain `git worktree remove --force` (adopted) to force-discard.
+4. **Execute**:
+   - `git branch -d <branch>` (safe - refuses if unmerged; catches the branch-in-another-worktree case).
+   - `git push origin --delete <branch>` (prompt y/n if the remote branch still exists; skip if no remote).
+   - `git worktree remove <path>` (context dir inside `.ddaro/` disappears with it).
+5. **Post-clear**: confirm to user; cwd remains at main so the next action proceeds naturally.
+
+`/ddaro:clear` applies identically to Tier 1 (owned) and Tier 2 (adopted). The only tier-specific logic lives in `/ddaro:abandon`.
 
 ---
 
@@ -448,26 +812,42 @@ If cwd is not a ddaro worktree: inform user and suggest `/ddaro:list`.
 
 ## /ddaro:list
 
-Walk all worktrees, filter to ddaro-owned.
+Walk all worktrees in `git worktree list --porcelain`, classify each one by tier (see "Worktree tiers"), and print them grouped.
 
 ```
 ddaro worktrees (4 / 10):
 
 Summary:
-  Active:      2 (uncommit)
-  Ready:       1 (pushed, mergeable)
-  Merged:      1 (clean recommended)
+  Owned:     2 active, 1 ready
+  Adopted:   1
+  Unmanaged: 1 (candidates for /ddaro:adopt)
 
-List:
-  d-fox        active    1 uncommit, 2 commits       2h ago
+Owned:
+  d-fox        active    1 uncommit, 2 commits        2h ago
   d-billing    active    3 uncommit                   30m ago
-  d-statement  ready     4 commits, pushed            1d ago
-  d-auth       merged    merged → main                8d ago  ⚠ /ddaro:clear
+  d-statement  ready     4 commits, pushed            1d ago  → /ddaro:merge
+
+Adopted:
+  receipt_processor-ui   [feat/phase-15-v28b-pending]   14 commits, pushed   adopted 1h ago
+    ℹ /ddaro:abandon refused — use `git worktree remove --force` from main
+
+Unmanaged (not under ddaro):
+  receipt_processor-experiment   [feat/xyz]   3 commits   2d ago
+    → /ddaro:adopt C:/.../receipt_processor-experiment
+    → or /ddaro:config protect <path> to mark it hands-off
+
+Protected (ddaro never touches):
+  receipt_processor                 [main]
+  receipt_processor-archive         [archive]
+
+External (owned by other tools):
+  .claude/worktrees/agent-a51235cb  [agent-a51235cb]
 ```
 
 Warnings:
-- At/over `warn_threshold`: "⚠ 5+ worktrees active - consider cleaning stale ones"
-- Stale entries (past `stale_days`): flagged inline
+- At/over `warn_threshold` owned+adopted worktrees: "⚠ N+ worktrees active - consider cleaning stale ones"
+- Stale entries (past `stale_days`): flagged inline with `⚠ STALE`
+- Owned worktrees whose branch is fully merged to main: suggest `/ddaro:clear`
 
 ---
 
@@ -610,22 +990,49 @@ Re-enter a ddaro worktree after a session ends, a crash, or a days-later return.
 
 ## /ddaro:abandon <name>
 
-Destructive. 3-layer protection required.
+Destructive. Force-discards a ddaro-owned worktree even if its commits are unmerged. Reserved for "this work went wrong - drop everything" situations.
 
-```
-⚠ Abandon d-<name> completely:
-  • N commits will be lost forever (M unpushed, K pushed)
-  • Worktree will be removed: <path>
-  • Context MD files will be deleted (S snapshots)
-  • Delete remote branch too? y/n
+### Preconditions
 
-Confirm: type exactly 'yes, I'm sure':
-```
+1. **cwd must equal `config.main_worktree`** (same rule as `/ddaro:clear` - see the cwd rules section). On mismatch, refuse with cd instructions.
+2. **Target tier must be `ddaro-owned`** (Tier 1).
+   - Tier 2 (**adopted**) is **refused**: ddaro does not force-destroy worktrees it did not create. Print:
+     ```
+     ✗ /ddaro:abandon refuses adopted worktrees.
+
+       Adopted means ddaro is managing, not owning. To force-discard
+       unmerged work on an adopted worktree, use plain git from main:
+
+         cd <main_worktree>
+         git worktree remove --force <path>
+         git branch -D <branch>
+         # optional: git push origin --delete <branch>
+     ```
+   - Tier 0 (main), Tier 3 (protected), Tier 4 (unmanaged), Tier 5 (external): also refused, each with its own remediation message.
+
+### Flow (after preconditions pass)
+
+3-layer protection enforced in order:
+
+1. **Layer 1 (`protected_worktrees` re-check)** — belt-and-braces; the tier check above already covers this.
+2. **Layer 2 (OWNED + not adopted)** — verified via the tier gate.
+3. **Layer 3 (typed confirmation)**:
+   ```
+   ⚠ Abandon d-<name> completely:
+     • N commits will be lost forever (M unpushed, K pushed)
+     • Worktree will be removed: <path>
+     • Context MD files will be deleted (S snapshots)
+     • Delete remote branch too? y/n
+
+   Confirm: type exactly 'yes, I'm sure':
+   ```
 
 On full confirmation:
 - `git worktree remove <path> --force`
 - `git branch -D d-<name>`
-- Optional: `git push origin --delete d-<name>`
+- Optional: `git push origin --delete d-<name>` (if user answered y above)
+
+After success, cwd is still main - no stranded shell.
 
 ---
 
@@ -676,11 +1083,14 @@ Direct, script-friendly, one-line.
 | `/ddaro:config init` | Relaunch 5-step setup wizard |
 | `/ddaro:config main <path>` | Change main worktree |
 | `/ddaro:config protect <path>` | Add to protected list |
+| `/ddaro:config unprotect <path>` | Remove from protected list |
+| `/ddaro:config external <pattern>` | Add a glob to `external_patterns` |
 | `/ddaro:config naming <key>` | Change naming strategy |
 | `/ddaro:config pool <key>` | Change name pool |
 | `/ddaro:config language <en\|ko>` | Change language |
 | `/ddaro:config context <true\|false>` | Toggle context MD writes |
 | `/ddaro:config max <N>` | Change max concurrent |
+| `/ddaro:config main_protection <off\|warn\|strict>` | Toggle the hook-based main-worktree guard (installs/uninstalls `.claude/settings.json` entries with y/n confirm) |
 
 Other removals / fine edits: edit config file manually.
 

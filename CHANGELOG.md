@@ -4,6 +4,39 @@ All notable changes to this plugin are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-04-23
+
+This is a large feature release that rounds out ddaro's coverage from "helper for new isolated work" to "first-class worktree manager that coexists with everything already in the repo." Three concept shifts, all backward-compat: existing 0.2.x users see no behaviour change until they opt in.
+
+### Added
+
+- **6-tier worktree model** (documented in `SKILL.md` → "Worktree tiers"). Every worktree ddaro sees is classified into one of: `main`, `ddaro-owned` (Tier 1), `adopted` (Tier 2, new), `protected` (Tier 3), `unmanaged` (Tier 4, new), `external` (Tier 5, new - for `.claude/worktrees/agent-*` and similar). The classification algorithm enforces priority (main > external > protected > owned/adopted > unmanaged) so stray flag files can't override user-declared protection. A per-command permission matrix makes it clear what each tier allows.
+- **`/ddaro:adopt <path>`** — new command. Bring an existing non-ddaro worktree under ddaro management without renaming the branch, moving files, or recreating anything. Only plants `<path>/.ddaro/OWNED`, `LOCK` (with `adopted: true`), `context/`, and `CURRENT.md`. Refuses main, protected, external, and already-ddaro targets. Adopted worktrees use `/ddaro:commit`, `/ddaro:merge`, `/ddaro:resume`, `/ddaro:clear` identically to owned; only `/ddaro:abandon` is refused (force-discard stays a plain-git operation).
+- **cwd rules for destructive commands** (SKILL.md → "cwd rules (destructive commands)"). `/ddaro:clear` and `/ddaro:abandon` now refuse unless cwd is `config.main_worktree`, printing a helpful `cd <main>` + re-run block. Structurally eliminates the "worktree deleted from inside — where does my shell go?" problem.
+- **`/ddaro:merge` cleanup hand-off**. The `y` branch of the post-merge cleanup prompt no longer executes deletion from inside the target worktree. Instead it prints the exact `cd <main>` + `/ddaro:clear <name>` block for the user to paste. One removal code path instead of two; works identically on Windows (where delete-while-inside fails) and Linux/macOS (where it succeeds but leaves a stale cwd).
+- **Unmanaged-worktree surfacing**. `/ddaro:start` Step 2 and `/ddaro:list` now detect and print worktrees that exist in git but are outside ddaro's management, offering three options: finish-in-place, `/ddaro:adopt`, or ignore. Never auto-adopts.
+- **Dirty-main classification**. `/ddaro:start` Step 5 classifies uncommitted main changes into "planning-like" vs "code" using the new `config.planning_patterns` (default: `.planning/**`, `.gsd/**`, `STATE.md`, `ROADMAP.md`, `CHANGELOG.md`). Offers targeted options (commit all / commit planning only / cherry-pick later / start anyway / cancel) instead of a blanket warning.
+- **Main protection hooks (opt-in)**. New `config.main_protection` key with three levels: `off` (default, no change from 0.2.1), `warn` (SessionStart notice + logged but allowed), `strict` (blocks `git commit` and Edit/Write inside main). Hooks ship inside the plugin (`./hooks/*.py`, stdlib-only, fail-open). Enable via `/ddaro:config main_protection warn|strict` — presents the `.claude/settings.json` entries for y/n/x confirm rather than silently mutating the user's settings. Bypass with `ALLOW_MAIN_DIRECT=1 <command>`.
+- **LOCK schema v2**. Adds `adopted: bool`, `original_branch: str`, `adopted_at: iso8601` fields. Absent fields default to `false` / null for 0.2.1 worktrees; no migration required.
+- **Config schema v2**. New keys: `external_patterns`, `planning_patterns`, `main_protection`. The `schema_version` field bumps from `1` to `2`. Older configs load unchanged with defaults filled in.
+- **`/ddaro:config` new actions**: `unprotect <path>`, `external <pattern>`, `main_protection <off|warn|strict>`.
+
+### Changed
+
+- **Commands table** (SKILL.md) now includes `/ddaro:adopt` and notes the main-cwd requirement on `/ddaro:clear` / `:abandon`.
+- **`/ddaro:list`** output restructured by tier: Owned / Adopted / Unmanaged / Protected / External. Surface adopt suggestions inline for unmanaged.
+- **Hard prohibitions** list in SKILL.md extends to explicitly ban "removing a worktree while cwd is inside it".
+
+### Internal
+
+- Plugin now declares `hooks: ./hooks/` in `plugin.json` alongside `commands` and `skills`.
+- Hooks reuse a shared `_shared.py` helper module (config lookup, cwd resolution, bypass check) so behaviour stays consistent across the three hook entry points.
+
+### Compatibility
+
+- 0.2.1 users see no behaviour change on upgrade. `main_protection` defaults to `off`, `external_patterns` / `planning_patterns` defaults match prior hardcoded behaviour, adopt is opt-in, tier reclassification is internal only.
+- Worktrees created under 0.2.1 keep working. Their LOCK files lack the `adopted` field and are read as `adopted: false` (i.e. Tier 1).
+
 ## [0.2.1] - 2026-04-23
 
 ### Fixed
