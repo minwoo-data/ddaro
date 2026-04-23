@@ -124,6 +124,26 @@ claude
 
 ---
 
+## 문제 해결
+
+### 설치했는데 `/ddaro:*` 명령이 안 나와요
+
+Plugin 은 Claude Code 시작 시에만 로드됩니다. `/ddaro:start` 및 기타 subcommand 가 안 뜨면:
+
+1. **Claude Code 재시작** — install/update 후 반드시 필요.
+2. `/plugin` 실행해서 `ddaro` 가 **enabled** 인지 확인.
+3. 목록에 있지만 비활성이면: `/plugin enable ddaro@ddaro`.
+4. 그래도 안 뜨면 `~/.claude.json` 열어서 `enabledPlugins` 에 `ddaro` 항목이 있는지 확인. `{}` 로 비어있으면 설치 미완료 → `/plugin install ddaro@ddaro` 재실행.
+
+증상 체크: `/ddaro` 가 local skill 만 잡히고 namespace 형태 (`/ddaro:start`, `/ddaro:commit`, …) 가 안 보이면 plugin 이 로드되지 않은 상태.
+
+### Marketplace add 는 됐는데 install 이 실패
+
+- 쉘에서 `https://github.com/minwoo-data/ddaro.git` 에 git clone 가능한지 확인.
+- Marketplace 제거 후 재등록: `/plugin marketplace remove ddaro` 후 Quick Start 1번 다시.
+
+---
+
 ## 요구사항
 
 - Claude Code (`/plugin` 지원 버전)
