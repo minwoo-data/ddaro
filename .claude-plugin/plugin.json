@@ -1,0 +1,25 @@
+{
+  "name": "ddaro",
+  "version": "0.1.0",
+  "description": "Worktree-based parallel workflow for Claude Code sessions. Isolated branch work with deletion-aware commits, size-based merge review, and crash-recoverable context logs. Korean triggers: /ddaro, 따로, 병렬로. English: /ddaro, parallel, isolated.",
+  "author": {
+    "name": "Minwoo Park",
+    "url": "https://github.com/minwoo-data"
+  },
+  "homepage": "https://github.com/minwoo-data/ddaro",
+  "repository": "https://github.com/minwoo-data/ddaro",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "worktree",
+    "parallel",
+    "workflow",
+    "git",
+    "branch",
+    "isolation",
+    "crash-recovery",
+    "ddaro"
+  ],
+  "commands": "./commands/",
+  "skills": "./skills/"
+}

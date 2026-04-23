@@ -1,0 +1,23 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node (in case commands grow helper scripts)
+node_modules/
+
+# Python (in case scripts grow)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Dev-time context dir (this repo is the plugin itself — no .ddaro here)
+.ddaro/
+
+# Claude Code local state
+.claude/settings.local.json

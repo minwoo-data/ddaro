@@ -1,0 +1,23 @@
+{
+  "name": "ddaro",
+  "description": "ddaro — worktree-based parallel workflow plugin (self-hosted marketplace)",
+  "owner": {
+    "name": "Minwoo Park",
+    "url": "https://github.com/minwoo-data"
+  },
+  "plugins": [
+    {
+      "name": "ddaro",
+      "source": "./",
+      "description": "Worktree-based parallel workflow for Claude Code. Isolated branch work with deletion-aware commits, size-based merge review, crash-recoverable context logs.",
+      "version": "0.1.0",
+      "homepage": "https://github.com/minwoo-data/ddaro",
+      "license": "MIT",
+      "author": {
+        "name": "Minwoo Park",
+        "url": "https://github.com/minwoo-data"
+      },
+      "keywords": ["worktree", "parallel", "workflow", "git", "branch", "isolation", "crash-recovery", "ddaro"]
+    }
+  ]
+}
