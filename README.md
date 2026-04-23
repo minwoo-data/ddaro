@@ -10,16 +10,18 @@ When you run multiple Claude Code sessions at once — or just want to keep `mai
 
 ## Quick Start
 
-### 1. Add the marketplace (one time)
+### 1. Add the haroom_plugin marketplace (one time)
 
 ```
-/plugin marketplace add https://github.com/minwoo-data/ddaro.git
+/plugin marketplace add https://github.com/minwoo-data/haroom_plugin.git
 ```
+
+`ddaro` is distributed through the **haroom_plugin** aggregator along with the other haroom plugins (prism, triad, mangchi).
 
 ### 2. Install
 
 ```
-/plugin install ddaro@ddaro
+/plugin install ddaro
 ```
 
 ### 3. Use

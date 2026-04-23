@@ -10,16 +10,18 @@
 
 ## Quick Start
 
-### 1. 마켓플레이스 등록 (처음 한 번만)
+### 1. haroom_plugin 마켓플레이스 등록 (처음 한 번만)
 
 ```
-/plugin marketplace add https://github.com/minwoo-data/ddaro.git
+/plugin marketplace add https://github.com/minwoo-data/haroom_plugin.git
 ```
+
+`ddaro` 는 haroom 플러그인 (prism, triad, mangchi) 과 함께 **haroom_plugin** aggregator 를 통해 배포됩니다.
 
 ### 2. 플러그인 설치
 
 ```
-/plugin install ddaro@ddaro
+/plugin install ddaro
 ```
 
 ### 3. 사용
