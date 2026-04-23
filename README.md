@@ -125,6 +125,26 @@ Then restart Claude Code.
 
 ---
 
+## Troubleshooting
+
+### `/ddaro:*` commands don't appear after install
+
+Plugins are loaded at Claude Code startup. If `/ddaro:start` and the other subcommands don't show up:
+
+1. **Restart Claude Code** — required after every install and update.
+2. Run `/plugin` and confirm `ddaro` is listed as **enabled**.
+3. If it's listed but disabled, enable it: `/plugin enable ddaro@ddaro`.
+4. Still missing? Open `~/.claude.json` and check that `enabledPlugins` contains a `ddaro` entry. If it's `{}`, the install didn't complete — rerun `/plugin install ddaro@ddaro`.
+
+Symptom check: if `/ddaro` only triggers a local skill (not the namespaced `/ddaro:start`, `/ddaro:commit`, …), the plugin is not loaded.
+
+### Marketplace add succeeded but install fails
+
+- Confirm git clone access to `https://github.com/minwoo-data/ddaro.git` from your shell.
+- Remove and re-add the marketplace: `/plugin marketplace remove ddaro` then the Quick Start step 1 again.
+
+---
+
 ## Requirements
 
 - Claude Code (any version with `/plugin` command)
