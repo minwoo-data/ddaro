@@ -9,15 +9,15 @@
     {
       "name": "ddaro",
       "source": "./",
-      "description": "Worktree-based parallel workflow for Claude Code. Isolated branch work with deletion-aware commits, size-based merge review, crash-recoverable context logs.",
-      "version": "0.1.2",
+      "description": "Worktree-based parallel workflow for Claude Code sessions. 6-tier worktree classification (main / owned / adopted / protected / unmanaged / external), /ddaro:adopt to bring existing worktrees under management, cwd-safe destructive commands (clear/abandon from main only), size-based merge review, crash-recoverable context logs, and opt-in main_protection hooks (off/warn/strict). Korean triggers: 따로, 병렬로, 분리해서.",
+      "version": "0.2.5",
       "homepage": "https://github.com/minwoo-data/ddaro",
       "license": "MIT",
       "author": {
         "name": "haroom",
         "url": "https://github.com/minwoo-data"
       },
-      "keywords": ["worktree", "parallel", "workflow", "git", "branch", "isolation", "crash-recovery", "ddaro"]
+      "keywords": ["claude-code", "worktree", "parallel", "workflow", "git", "branch", "isolation", "crash-recovery", "adopt", "main-protection", "ddaro"]
     }
   ]
 }

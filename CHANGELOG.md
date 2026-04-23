@@ -4,6 +4,19 @@ All notable changes to this plugin are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-04-23
+
+Metadata hygiene release. No behaviour changes — just brings shipped metadata in sync with the actual 0.2.x feature set and drops internal artifacts that shouldn't have been in the published tree.
+
+### Fixed
+
+- **`.claude-plugin/marketplace.json` stale** — the plugin's self-hosted marketplace metadata was still describing the 0.1.x feature set (`"version": "0.1.2"`, "deletion-aware commits, size-based merge review, crash-recoverable context logs"). Now matches `plugin.json` 0.2.5: mentions 6-tier worktree model, `/ddaro:adopt`, cwd-safe destructive commands, main-protection hooks, Korean triggers.
+- **Version drift inside the plugin** — `plugin.json` was 0.2.4 while self-hosted `marketplace.json` was 0.1.2; both now 0.2.5.
+
+### Removed
+
+- **`docs/discussion/ddaro-skill/`** — internal design-discussion artifacts (`source.md`, `round-1.md`, `state.json`) that were getting shipped to users. The authoritative user-facing spec is `skills/ddaro/SKILL.md`; design history belongs in git, not the plugin payload.
+
 ## [0.2.4] - 2026-04-23
 
 This is a large feature release that rounds out ddaro's coverage from "helper for new isolated work" to "first-class worktree manager that coexists with everything already in the repo." Three concept shifts, all backward-compat: existing 0.2.x users see no behaviour change until they opt in.
