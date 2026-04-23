@@ -4,6 +4,25 @@ All notable changes to this plugin are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-04-23
+
+### Fixed
+- **OWNED / LOCK path**: moved from `<worktree>/.git/ddaro-owned` / `-lock` to `<worktree>/.ddaro/OWNED` / `LOCK`. In a `git worktree` setup `<worktree>/.git` is a file pointer, not a directory, so third-party files placed there could fail or be pruned by `git worktree remove` / `git gc`.
+- **`.gitignore` scope**: `.ddaro/` exclusion is now appended once to `<main_worktree>/.gitignore` instead of `<worktree>/.ddaro/.gitignore` with pattern `*` (which ignored children but not the dir entry).
+- **Section headings**: all 10 subcommand section headings now use colon form (`## /ddaro:start` rather than `## /ddaro start`) to match the Commands table and eliminate LLM ambiguity about the required invocation form.
+- **`mangchi` merge override**: removed from `--review` accepted values; only `skip | triad | prism` are supported.
+- **Size-band boundaries**: rewritten as a single consistent scheme — `small = lines≤50 AND files≤2`; `medium = not small AND lines≤300 AND files≤10`; `large = lines>300 OR files>10`.
+- **Auto commit message**: em-dash replaced with ASCII hyphen so pre-commit hooks rejecting non-ASCII do not choke. Documented `--no-verify` is never used as a retry.
+- **Local-merge path**: now emits an explicit copy-paste block (`cd <main_worktree> && git merge d-<name> && git push`) instead of vague wording. Dropped the false "Claude cannot cd" claim.
+- **Worktree creation path**: `git worktree add` is now anchored to `main_worktree` (always a sibling), not cwd-relative, so the result is stable regardless of where the user invokes `/ddaro:start`.
+- **Lock-mismatch behavior**: specification tightened to "print discrepancy, prompt y/n, default abort" (previously just "warn").
+
+### Added
+- **`schema_version` config field**: required for future migrations; on load, if the value does not match the current schema, ddaro runs a named migration before use.
+- **"Why this exists" intro**: motivation for parallel-session users and crash-recovery, plus a sentence defining `git worktree` for readers who haven't used it.
+- **"Quick start" walkthrough**: 6-line fenced block showing the minimum `/ddaro:start` → edit → `/ddaro:commit` → `/ddaro:merge` flow, before the Commands table.
+- **3-Layer Protection rationale**: one-sentence explanation of why three layers exist (abandon/clean destroy real work; each layer catches a different mistake).
+
 ## [0.1.0] — 2026-04-23
 
 ### Added

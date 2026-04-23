@@ -1,7 +1,7 @@
 ---
 name: ddaro
 description: "Worktree-based parallel workflow. Create isolated worktree + branch, commit with deletion-aware checks, review and merge to main by diff size, recover from session/IDE crashes via per-commit context MD. Subcommands: start / commit / merge / clean / status / list / summary / abandon / setting / config. Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
-version: "0.1.1"
+version: "0.1.0"
 author: "Minwoo Park"
 repository: "https://github.com/minwoo-data/ddaro"
 license: "MIT"
@@ -14,35 +14,6 @@ license: "MIT"
 Main worktree is never touched. Work happens in dedicated worktrees, one branch each, with lock files and on-disk context snapshots. Designed for parallel Claude Code sessions that must not stomp on each other.
 
 **Design principle**: 1 worktree = 1 branch = 1 Claude session. Physical isolation prevents file collisions. Context MDs survive VS Code crashes and session restarts.
-
----
-
-## Why this exists
-
-Running two Claude Code sessions at once on the same repo? They both write to the working tree and overwrite each other's edits. Close VS Code mid-task? The plan Claude had in its head is gone. ddaro fixes both:
-
-- Each session gets its own isolated folder (a git worktree on its own branch). Two sessions can edit in parallel without collisions.
-- Every commit writes a plain-text recap to disk, so a new session can pick up where the last one died.
-
-A **git worktree** is a second working folder that shares the same repository but checks out a different branch — so two Claude sessions can edit independently without flipping branches back and forth.
-
----
-
-## Quick start
-
-```
-/ddaro:start                     # creates isolated worktree + branch (e.g. d-1)
-                                 # first run prompts a 5-step setup
-cd <project>-d-1                 # open in a new terminal
-claude                           # start a Claude Code session there
-
-# ... edit code ...
-
-/ddaro:commit "fix login bug"    # safe commit + push + context snapshot
-/ddaro:merge                     # size-based review -> PR -> cleanup
-```
-
-First-time users: `/ddaro:start` walks you through the 5-step setup on first invocation.
 
 ---
 
@@ -102,7 +73,6 @@ Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config poo
 
 ```json
 {
-  "schema_version": 1,
   "main_worktree": "C:\\path\\to\\myapp",
   "project_name": "myapp",
   "protected_worktrees": [
@@ -128,7 +98,6 @@ Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config poo
 
 ### Field reference
 
-- **`schema_version`**: integer, currently `1`. Required for future migrations; on load, if the value does not match the current schema, ddaro runs a named migration before use.
 - **`main_worktree`**: absolute path to the clean main-branch worktree. ddaro never mutates this.
 - **`protected_worktrees`**: paths ddaro will refuse to create in or delete. Auto-populated during init setup plus sibling folders user flags.
 - **`max_concurrent`**: hard ceiling. `/ddaro:start` rejects beyond this.
@@ -144,13 +113,13 @@ If config is missing, **the first `/ddaro:start` triggers the 5-step setup promp
 
 ## 3-Layer Protection
 
-Why three layers? Because `abandon` and `clean` delete real work, and a single confirmation has caused data loss in practice. Each layer catches a different mistake (wrong path, wrong kind of worktree, wrong intent). Before any destructive operation (worktree remove, branch delete), all 3 layers must pass:
+Before any destructive operation (worktree remove, branch delete), all 3 layers must pass:
 
 ### Layer 1 — `protected_worktrees` list
 Paths declared in config are never written to or deleted. Protects user-managed worktrees.
 
-### Layer 2 — `.ddaro/OWNED` flag
-ddaro only plants this file in worktrees it created. **Absent → not a cleanup candidate.** Even if a user-made worktree accidentally has a `-d-*` name, this flag prevents its destruction. The flag lives inside `<worktree>/.ddaro/` (alongside `LOCK` and `context/`) rather than under `<worktree>/.git/`, because in a `git worktree` setup `<worktree>/.git` is a FILE pointer to the main repo's per-worktree gitdir — third-party files placed there are not guaranteed stable across `git worktree remove`, `git gc`, or future git versions.
+### Layer 2 — `.git/ddaro-owned` flag
+ddaro only plants this file in worktrees it created. **Absent → not a cleanup candidate.** Even if a user-made worktree accidentally has a `-d-*` name, this flag prevents its destruction.
 
 ### Layer 3 — Typed confirmation (abandon only)
 `/ddaro:abandon` requires the user to type `yes, I'm sure` verbatim. No shortcuts.
@@ -167,7 +136,7 @@ ddaro only plants this file in worktrees it created. **Absent → not a cleanup 
 
 ## Lock File & Context Directory
 
-### Lock (`<worktree>/.ddaro/LOCK`)
+### Lock (`<worktree>/.git/ddaro-lock`)
 
 ```json
 {
@@ -179,22 +148,19 @@ ddaro only plants this file in worktrees it created. **Absent → not a cleanup 
 }
 ```
 
-Every subcommand validates `current branch == lock.branch`. On mismatch, it prints the discrepancy, prompts y/n, and defaults to abort. This catches the user having manually switched branches inside a ddaro worktree.
+Every subcommand validates `current branch == lock.branch` and warns on mismatch. If the user manually switched branches inside a ddaro worktree, this catches it.
 
 ### Context Directory (`<worktree>/.ddaro/`)
 
 ```
 <worktree>/.ddaro/
-├── OWNED                                      # empty flag — proves ddaro created this worktree
-├── LOCK                                       # branch/topic/created_at/language JSON
-├── CURRENT.md                                 # latest running state, overwritten each commit
-└── context/
-    ├── 2026-04-23T10-00-00-a1b2c3d.md        # commit 1 snapshot
-    ├── 2026-04-23T11-15-00-b2c3d4e.md        # commit 2 snapshot
-    └── 2026-04-23T12-30-00-c3d4e5f.md        # commit 3 snapshot
+├── .gitignore                                  # contents: `*` — excluded from git tracking
+├── context/
+│   ├── 2026-04-23T10-00-00-a1b2c3d.md          # commit 1 snapshot
+│   ├── 2026-04-23T11-15-00-b2c3d4e.md          # commit 2 snapshot
+│   └── 2026-04-23T12-30-00-c3d4e5f.md          # commit 3 snapshot
+└── CURRENT.md                                   # latest running state, overwritten each commit
 ```
-
-The `.ddaro/` directory is kept out of git by appending a single `.ddaro/` line to the project's root `.gitignore` at `<main_worktree>/.gitignore` on first `/ddaro:start` (added once if absent).
 
 **Crash recovery**: after VS Code dies or Claude Code session ends, `/ddaro:summary` reads these files to rebuild context. No user setup needed.
 
@@ -256,7 +222,7 @@ If this session restarts:
 
 ---
 
-## /ddaro:start [name]
+## `/ddaro start [name]`
 
 1. **Config check**: if `.ddaro/config.json` missing, run initial 5-step setup (language → main worktree → protected list → naming strategy → name pool).
 2. **Existing-worktree scan**: if any ddaro-owned worktrees already exist, offer to resume one instead of creating new:
@@ -273,17 +239,15 @@ If this session restarts:
    - Else → auto-generate per `naming_strategy` + `name_pool`
    - Collision → append `-2`, `-3`
 5. **Main-worktree state check**: if main is dirty, warn and confirm before proceeding.
-6. **Create worktree** (path is always anchored to `main_worktree`, never cwd — worktree is created as a sibling of `main_worktree`):
+6. **Create worktree**:
    ```bash
-   git -C <main_worktree> worktree add \
-     <main_worktree>/../<project>-d-<name> \
-     -b d-<name> main
+   git worktree add <project>-d-<name> -b d-<name> main
    ```
 7. **Plant ownership + lock + context dir**:
+   - `touch <worktree>/.git/ddaro-owned`
+   - Write `<worktree>/.git/ddaro-lock` (JSON with branch, topic, created_at, main_worktree, language)
    - `mkdir <worktree>/.ddaro/context/`
-   - `touch <worktree>/.ddaro/OWNED`
-   - Write `<worktree>/.ddaro/LOCK` (JSON with branch, topic, created_at, main_worktree, language)
-   - Append `.ddaro/` to `<main_worktree>/.gitignore` if the line is not already present (once per project).
+   - `echo "*" > <worktree>/.ddaro/.gitignore`
    - Write initial `<worktree>/.ddaro/CURRENT.md`
 8. **Output copy-paste prompt** (in config language):
    ```
@@ -302,13 +266,13 @@ If this session restarts:
 
 ---
 
-## /ddaro:commit [message]
+## `/ddaro commit [message]`
 
 Repeatable per edit chunk. Each call writes a context snapshot.
 
-1. **Lock validation**: if current branch ≠ lock.branch, print the discrepancy, prompt y/n, default abort.
+1. **Lock validation**: if current branch ≠ lock.branch, warn and confirm.
 2. **Main-worktree refusal**: if cwd is `main_worktree`, stop and tell the user to run `/ddaro:start`.
-3. **Stage**: `git add -A` (the `.ddaro/` directory is excluded via `<main_worktree>/.gitignore`).
+3. **Stage**: `git add -A` (worktree's `.ddaro/` is already gitignored).
 4. **Deletion analysis**:
 
    | Pattern | Verdict | User confirm |
@@ -329,7 +293,7 @@ Repeatable per edit chunk. Each call writes a context snapshot.
    
    y / n / abort
    ```
-6. **Commit**: `git commit -m "<message>"`. If no message, auto-generate `ddaro: d-<name> - N files (+X -Y)` (ASCII hyphen so pre-commit hooks rejecting non-ASCII do not choke). If the hook still rejects, stop and ask the user for a message — never retry with `--no-verify`.
+6. **Commit**: `git commit -m "<message>"`. If no message, auto-generate `ddaro: d-<name> — N files (+X -Y)`.
 7. **Push**: `git push origin d-<name>`. Every commit backs up to remote.
 8. **Context write** (if `context_persistence: true`):
    - Create `<worktree>/.ddaro/context/<ISO-timestamp>-<sha7>.md` with:
@@ -351,7 +315,7 @@ Repeatable per edit chunk. Each call writes a context snapshot.
 
 ---
 
-## /ddaro:merge
+## `/ddaro merge`
 
 Work complete, time to ship.
 
@@ -367,26 +331,20 @@ Work complete, time to ship.
    ```
    If conflicts reported, list files and stop. User must rebase or resolve before retry.
 5. **Diff size measurement** (`main..HEAD`):
-   - small: `lines ≤ 50 AND files ≤ 2`
-   - medium: not small, and `lines ≤ 300 AND files ≤ 10`
-   - large: `lines > 300 OR files > 10`
+   - small: `<50 lines, ≤2 files`
+   - medium: `50–300 lines, 3–10 files`
+   - large: `>300 lines OR >10 files`
 6. **Size-based review**:
    - small → deletion re-confirm only
    - medium → invoke `triad` skill on the diff
    - large → invoke `prism` skill on the diff
-   - User flag overrides: `--review=skip | triad | prism`
+   - User flag overrides: `--review=skip | triad | prism | mangchi`
 7. **Pure-deletion re-scan**: whole-diff check — anything that existed on main but disappears in the merge gets flagged.
 8. **Final y/n** from user.
 9. **Merge method**:
    - **PR path (default)**: `gh pr create` → print PR URL → human reviews/merges on GitHub.
      - Optional: include CURRENT.md's Journey section in PR body.
-   - **Local path** (`--local` flag): output the following copy-paste block to the user:
-     ```
-     Local merge — run in the main worktree:
-       cd <main_worktree>
-       git merge d-<name>
-       git push
-     ```
+   - **Local path** (`--local` flag): Claude cannot cd to main worktree, so output copy-paste prompt telling user to switch to main and run `git merge d-<name>`.
 10. **Post-merge cleanup prompt**:
     ```
     ✓ Merge complete: d-<name> → main (K commits, +X -Y)
@@ -407,7 +365,7 @@ Work complete, time to ship.
 
 ---
 
-## /ddaro:clean [name]
+## `/ddaro clean [name]`
 
 Clean up ddaro worktrees whose branches are already merged to main.
 
@@ -418,11 +376,11 @@ Clean up ddaro worktrees whose branches are already merged to main.
 
 ---
 
-## /ddaro:status
+## `/ddaro status`
 
 Read-only. Based on current cwd.
 
-If cwd is a ddaro worktree (has `.ddaro/OWNED`):
+If cwd is a ddaro worktree (has `.git/ddaro-owned`):
 
 ```
 Current worktree: <path>
@@ -443,7 +401,7 @@ If cwd is not a ddaro worktree: inform user and suggest `/ddaro:list`.
 
 ---
 
-## /ddaro:list
+## `/ddaro list`
 
 Walk all worktrees, filter to ddaro-owned.
 
@@ -468,7 +426,7 @@ Warnings:
 
 ---
 
-## /ddaro:summary [name]
+## `/ddaro summary [name]`
 
 Content-based recap. **User supplies no goal at `start` time** — Claude reconstructs from commits, diffs, and context MDs.
 
@@ -530,7 +488,7 @@ VS Code dies / Claude Code session resets → open new session → `cd <worktree
 
 ---
 
-## /ddaro:abandon <name>
+## `/ddaro abandon <name>`
 
 Destructive. 3-layer protection required.
 
@@ -551,7 +509,7 @@ On full confirmation:
 
 ---
 
-## /ddaro:setting — Interactive menu
+## `/ddaro setting` — Interactive menu
 
 ```
 ⚙ ddaro settings
@@ -588,7 +546,7 @@ Each selection opens a sub-menu. On change, write back to `<main>/.ddaro/config.
 
 ---
 
-## /ddaro:config [action] [value]
+## `/ddaro config [action] [value]`
 
 Direct, script-friendly, one-line.
 
@@ -696,8 +654,8 @@ What this plugin cannot protect against:
 ## Related files
 
 - `<main>/.ddaro/config.json` — per-project settings (language, protect, naming, pool)
-- `<worktree>/.ddaro/OWNED` — empty flag file; presence proves ddaro created the worktree
-- `<worktree>/.ddaro/LOCK` — branch/topic/created_at/language JSON
+- `<worktree>/.git/ddaro-owned` — empty flag file; presence proves ddaro created the worktree
+- `<worktree>/.git/ddaro-lock` — branch/topic/created_at/language JSON
 - `<worktree>/.ddaro/context/*.md` — per-commit snapshots (crash recovery)
 - `<worktree>/.ddaro/CURRENT.md` — running state, overwritten each commit
-- `<main_worktree>/.gitignore` — contains a `.ddaro/` line that keeps the directory out of git (added once by `/ddaro:start`)
+- `<worktree>/.ddaro/.gitignore` — excludes the `.ddaro/` directory from git tracking
