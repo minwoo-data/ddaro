@@ -1,6 +1,6 @@
 {
   "name": "ddaro",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Worktree-based parallel workflow for Claude Code sessions. 6-tier classification (main / owned / adopted / protected / unmanaged / external), /ddaro:adopt to bring existing worktrees under management, cwd-safe destructive commands (clear/abandon run from main only), merge hand-off, and main_protection hooks (default strict — prompted during first-time setup). /ddaro:start now runs a 6-step setup with explicit 'is cwd main?' confirmation. /ddaro:abandon accepts adopted targets via --force. Commands collapsed: setting→config (menu on no-args), summary→resume --recap-only. Korean triggers: /ddaro, 따로, 병렬로. English: /ddaro, parallel, isolated.",
   "author": {
     "name": "haroom",
@@ -23,6 +23,5 @@
     "ddaro"
   ],
   "commands": "./commands/",
-  "skills": "./skills/",
-  "hooks": "./hooks/"
+  "skills": "./skills/"
 }

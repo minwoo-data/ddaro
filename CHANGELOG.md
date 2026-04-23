@@ -4,6 +4,18 @@ All notable changes to this plugin are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-04-23
+
+Install-blocking fix. 0.3.0 refused to install against recent Claude Code builds with "Validation errors: hooks: Invalid input". The plugin.json field `"hooks": "./hooks/"` (a directory path) does not match the hooks schema, which expects event/matcher/command entries. Our hook scripts are installed imperatively by `/ddaro:config main_protection strict` (merged into the user's `.claude/settings.json`), not auto-loaded by the plugin manifest, so the field was never doing anything useful. It has been removed.
+
+### Fixed
+
+- **`plugin.json` no longer declares `"hooks": "./hooks/"`.** Claude Code's updated plugin validator rejected this string-form hooks value. The Python hook scripts (`./hooks/check-main-bash.py`, `check-main-edit.py`, `session-start-notice.py`) still ship inside the plugin tree and are still installed into the user's `.claude/settings.json` by `/ddaro:config main_protection <warn|strict>` (and by Step 6 of `/ddaro:start` first-time setup). No behaviour change — just metadata that was blocking install.
+
+### Known follow-ups (carried from 0.3.0)
+
+- `skills/ddaro/SKILL.md` body sections for start / resume / abandon / config still need syncing to the new command-file spec.
+
 ## [0.3.0] - 2026-04-23
 
 Surface-area pruning + opinionated first-time setup. This is a minor-breaking release: two subcommands are removed in favor of flags on existing ones, and the `/ddaro:start` first-run flow is opinionated enough to warrant a minor bump. Legacy aliases still route, so existing muscle memory prints a one-line deprecation and then works.
