@@ -4,6 +4,14 @@ All notable changes to this plugin are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-23
+
+### Fixed
+- **`/ddaro:merge` no longer auto-invokes other plugins**. Previously medium diffs would auto-call `triad` and large diffs would auto-call `prism`, creating a hidden runtime dependency on sibling haroom plugins. ddaro is now truly standalone: size bands only control deletion-scan strictness and print a size warning. Cross-plugin review is now **opt-in only** via `--review=<triad|prism>`, and if the named plugin is not installed the command stops with an install hint instead of silently failing.
+
+### Changed
+- **`--review=<triad|prism>` semantics**: flag is now explicit opt-in. Previously the flag overrode the auto-invoke default; now the flag is the only way cross-plugin review runs.
+
 ## [0.2.0] - 2026-04-23
 
 ### Removed

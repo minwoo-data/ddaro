@@ -13,9 +13,9 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## `/ddaro merge`" a
 - Dry-run merge with `git merge-tree` base HEAD origin/main. If conflicts, list files and stop.
 - Measure diff size (`main..HEAD`):
   - small (<50 lines, ≤2 files) → deletion re-confirm only
-  - medium (50-300 lines, 3-10 files) → invoke `triad`
-  - large (>300 lines or >10 files) → invoke `prism`
-  - user override via `--review=...`
+  - medium (50-300 lines, 3-10 files) → deletion re-confirm + size warning
+  - large (>300 lines or >10 files) → deletion re-confirm + size warning + pure-deletion re-scan
+  - `--review=<triad|prism>` (optional, opt-in): if the named plugin is installed on disk, pass the diff to it. If not installed, stop and print install hint. Never auto-invoked from size band alone.
 - Scan pure deletions across `main..HEAD`.
 - Final `y/n` to user.
 - Merge method: default `gh pr create` (PR path) unless `--local` (switch to main worktree + provide copy-paste merge prompt).

@@ -1,7 +1,7 @@
 ---
 name: ddaro
 description: "Worktree-based parallel workflow. Create isolated worktree + branch, commit with deletion-aware checks, review and merge to main by diff size, recover from session/IDE crashes via per-commit context MD. Subcommands: start / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
-version: "0.2.0"
+version: "0.2.1"
 author: "haroom"
 repository: "https://github.com/minwoo-data/ddaro"
 license: "MIT"
@@ -373,11 +373,11 @@ Work complete, time to ship.
    - small: `lines ≤ 50 AND files ≤ 2`
    - medium: not small, and `lines ≤ 300 AND files ≤ 10`
    - large: `lines > 300 OR files > 10`
-6. **Size-based review**:
+6. **Size-based handling** (standalone - no automatic runtime dependency on other plugins):
    - small → deletion re-confirm only
-   - medium → invoke `triad` skill on the diff
-   - large → invoke `prism` skill on the diff
-   - User flag overrides: `--review=skip | triad | prism`
+   - medium → deletion re-confirm + size warning printed to user
+   - large → deletion re-confirm + size warning + pure-deletion re-scan across the full diff
+   - `--review=<triad|prism>` (optional, opt-in only): if the named plugin is detected on disk (stat-check `${HOME}/.claude/plugins/cache/haroom_plugins/<name>/` or `${HOME}/.claude/skills/<name>/`), pass the diff to it. If the plugin is not installed, stop and print the install hint (`/plugin marketplace add https://github.com/minwoo-data/haroom_plugins.git` then `/plugin install <name>`). Never auto-invoked from the size band alone.
 7. **Pure-deletion re-scan**: whole-diff check - anything that existed on main but disappears in the merge gets flagged.
 8. **Final y/n** from user.
 9. **Merge method**:

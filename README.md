@@ -93,7 +93,7 @@ Also callable as `/ddaro <subcommand>`.
 
 - **Physical isolation** - each task gets its own git worktree in its own folder. Parallel Claude sessions cannot collide.
 - **Deletion-aware commits** - classifies diff deletions (replace / format / pure / function-level / >100 lines) and prompts only when destructive.
-- **Size-based merge review** - small diffs merge after deletion re-check; medium diffs auto-invoke `triad`; large diffs auto-invoke `prism`.
+- **Size-based merge handling** - small / medium / large diffs each get progressively stricter deletion scans. Cross-plugin review (`--review=triad` or `--review=prism`) is opt-in only and requires the named plugin to be installed. ddaro never calls another plugin automatically.
 - **Crash-recoverable context** - every commit writes `.ddaro/context/<sha>.md` and refreshes `CURRENT.md`. After a session or IDE crash, `/ddaro:summary` rebuilds the full picture.
 - **3-layer protection** against accidental destruction:
   - Layer 1: `protected_worktrees` config list
