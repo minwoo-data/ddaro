@@ -1,7 +1,7 @@
 ---
 name: ddaro
-description: "Worktree-based parallel workflow. Create isolated worktree + branch, commit with deletion-aware checks, review and merge to main by diff size, recover from session/IDE crashes via per-commit context MD. Subcommands: start / commit / merge / clean / status / list / summary / abandon / setting / config. Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
-version: "0.1.1"
+description: "Worktree-based parallel workflow. Create isolated worktree + branch, commit with deletion-aware checks, review and merge to main by diff size, recover from session/IDE crashes via per-commit context MD. Subcommands: start / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
+version: "0.1.2"
 author: "Minwoo Park"
 repository: "https://github.com/minwoo-data/ddaro"
 license: "MIT"
@@ -55,8 +55,9 @@ First-time users: `/ddaro:start` walks you through the 5-step setup on first inv
 | `/ddaro:merge` | Pre-flight check + review + merge + cleanup | Work complete |
 | `/ddaro:status` | Current worktree state | Quick check |
 | `/ddaro:list` | All ddaro worktrees, technical state | Overview |
-| `/ddaro:summary [name]` | Content recap from commits + context | Crash recovery / returning after days |
-| `/ddaro:clean [name]` | Delete merged worktree post-hoc | After `merge` with "keep" choice |
+| `/ddaro:summary [name]` | Content recap from commits + context | Read-only "what did I do?" |
+| `/ddaro:resume` | Pick a worktree + recap + cd + paste prompt | Crash recovery / returning after days |
+| `/ddaro:clear [name]` | Delete merged worktree post-hoc | After `merge` with "keep" choice |
 | `/ddaro:abandon <name>` | 3-layer guarded force-discard | Work went wrong |
 | `/ddaro:setting` | Interactive settings menu | Browse and change config |
 | `/ddaro:config [key] [val]` | Direct config access | Known key, fast change |
@@ -144,7 +145,7 @@ If config is missing, **the first `/ddaro:start` triggers the 5-step setup promp
 
 ## 3-Layer Protection
 
-Why three layers? Because `abandon` and `clean` delete real work, and a single confirmation has caused data loss in practice. Each layer catches a different mistake (wrong path, wrong kind of worktree, wrong intent). Before any destructive operation (worktree remove, branch delete), all 3 layers must pass:
+Why three layers? Because `abandon` and `clear` delete real work, and a single confirmation has caused data loss in practice. Each layer catches a different mistake (wrong path, wrong kind of worktree, wrong intent). Before any destructive operation (worktree remove, branch delete), all 3 layers must pass:
 
 ### Layer 1 — `protected_worktrees` list
 Paths declared in config are never written to or deleted. Protects user-managed worktrees.
@@ -267,6 +268,8 @@ If this session restarts:
      3) resume d-billing  (1d ago, pushed, ready to merge)
      4) cancel
    ```
+
+   > Tip: if you already know you want to re-enter an existing worktree (e.g. after a crash or a days-later return), `/ddaro:resume` is the direct path — it generates a recap + cd + paste prompt in one step.
 3. **Concurrency check**: reject at `max_concurrent`; warn at `warn_threshold` and list stale candidates.
 4. **Name resolution**:
    - If user supplied `<name>` → slugify + collision check
@@ -394,7 +397,7 @@ Work complete, time to ship.
     
     Clean up worktree <path>?
       y (default) — delete branch + worktree (and .ddaro/context)
-      n           — keep (further edits possible; `/ddaro:clean` later)
+      n           — keep (further edits possible; `/ddaro:clear` later)
     
     y/n [y]:
     ```
@@ -407,9 +410,9 @@ Work complete, time to ship.
 
 ---
 
-## /ddaro:clean [name]
+## /ddaro:clear [name]
 
-Clean up ddaro worktrees whose branches are already merged to main.
+Clean up ddaro worktrees whose branches are already merged to main. (Renamed from `/ddaro:clean` in v0.1.2; the old name is accepted as a deprecated alias that prints a one-line warning and forwards here. The alias will be removed in v0.2.0.)
 
 1. No name → list all merged ddaro-owned worktrees as candidates.
 2. Confirm via `git branch --merged main`.
@@ -459,7 +462,7 @@ List:
   d-fox        active    1 uncommit, 2 commits       2h ago
   d-billing    active    3 uncommit                   30m ago
   d-statement  ready     4 commits, pushed            1d ago
-  d-auth       merged    merged → main                8d ago  ⚠ /ddaro:clean
+  d-auth       merged    merged → main                8d ago  ⚠ /ddaro:clear
 ```
 
 Warnings:
@@ -495,7 +498,7 @@ ddaro worktrees (3 / 10):
 
 ━━━ d-auth (8d ago) ⚠ STALE ━━━━━━━━━━━━
   [merged → main] <recap>
-  → /ddaro:clean recommended
+  → /ddaro:clear recommended
 ```
 
 ### With name → detailed recap
@@ -526,7 +529,82 @@ Progress:
 
 ### Crash recovery usage
 
-VS Code dies / Claude Code session resets → open new session → `cd <worktree path>` → `/ddaro:summary` → full context restored in one command.
+For actively resuming a dead session, `/ddaro:resume` is the higher-level entry point — it runs summary internally and produces a cd + paste block. Use `/ddaro:summary` directly when you only want a read-only recap without re-entering.
+
+---
+
+## /ddaro:resume
+
+Re-enter a ddaro worktree after a session ends, a crash, or a days-later return. Combines the existing-worktree scan from `/ddaro:start`, the recap from `/ddaro:summary`, and an auto-generated paste prompt, so one command covers the whole "where was I?" flow.
+
+### Flow
+
+1. **Scan**: enumerate ddaro-owned worktrees and classify each:
+   - `active` — uncommit present (edit in progress)
+   - `ready`  — all committed + pushed, waiting on `/ddaro:merge`
+   - `stale`  — older than `stale_days`
+   - `merged` — already merged; surfaced but suggests `/ddaro:clear` instead of resume
+2. **Picker**:
+   ```
+   Resumable ddaro worktrees:
+     1) d-billing   active    2 uncommit, 3 commits    2h ago
+     2) d-fox       ready     4 commits pushed         1d ago — ready to merge
+     3) d-auth      stale     5 commits                9d ago ⚠
+     4) cancel
+
+     Select (or 'all' for one-line recap of each):
+   ```
+3. **On selection**: internally run `/ddaro:summary <name>`, then print a resume block combining the recap with cd + paste prompt:
+   ```
+   ━━━ d-billing — resume plan ━━━━━━━━━━━━━━━━━━━━━━━
+   Branch:        d-billing  (lock ✓)
+   Topic:         fix statement totals
+   Created:       2026-04-23 09:00 (2h ago)
+   Progress:      3 commits, 2 uncommit files
+
+   ━ Where you stopped ━
+     Last commit:  "add tax handling" (25m ago)
+     Uncommit:     src/services/statement.py:142
+     Inferred:     finishing TODO at line 156
+
+   ━ Next recommended ━
+     • /ddaro:commit  (stage uncommit first)
+     • /ddaro:merge   (size: medium → triad review)
+
+   ━━━ Copy-paste to resume ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+     cd <worktree path>
+     claude
+
+     Then paste:
+     ──────────────────────────────────────────────
+     Resuming d-billing — topic: fix statement totals.
+     Last state: 3 commits, 2 uncommit on src/services/statement.py.
+     Next: finish TODO at line 156 → /ddaro:commit → /ddaro:merge.
+
+     Run /ddaro:summary first to confirm state, then continue.
+     ──────────────────────────────────────────────
+   ```
+4. **`all` selection**: one-line recap per worktree; no paste prompts.
+
+### Edge cases
+
+| Situation | Behavior |
+|---|---|
+| No ddaro-owned worktrees | Print "Nothing to resume. Use `/ddaro:start` to begin new work." |
+| cwd already inside a ddaro worktree | Warn that `/ddaro:status` may fit better; still allow picker if user confirms |
+| cwd is `main_worktree` | Normal picker (most common entry) |
+| Selected worktree has no `.ddaro/context/` (manually deleted or `context_persistence: false`) | Rebuild recap from `git log` only; flag "context unavailable" |
+| Lock file disagrees with current branch | Warn, show discrepancy, proceed on user confirmation |
+
+### When to use what
+
+|  | `/ddaro:summary` | `/ddaro:resume` | `/ddaro:start` |
+|---|---|---|---|
+| Purpose | Read-only recap | Recap + re-entry plan | New work (with optional resume offer) |
+| Side effect | None | None | Creates worktree |
+| Paste prompt | No | Yes | Yes (new topic) |
+| Best for | "What did I do?" | "I died, put me back" | "Start something new" |
 
 ---
 

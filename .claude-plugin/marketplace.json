@@ -10,7 +10,7 @@
       "name": "ddaro",
       "source": "./",
       "description": "Worktree-based parallel workflow for Claude Code. Isolated branch work with deletion-aware commits, size-based merge review, crash-recoverable context logs.",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "homepage": "https://github.com/minwoo-data/ddaro",
       "license": "MIT",
       "author": {
