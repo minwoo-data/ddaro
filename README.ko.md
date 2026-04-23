@@ -43,8 +43,9 @@
 | `/ddaro:merge` | 충돌 사전 확인, 규모별 리뷰, merge, y/n 정리 |
 | `/ddaro:status` | 현재 worktree 상태 (branch, commits, push, lock) |
 | `/ddaro:list` | ddaro 소유 worktree 전체 기술 요약 |
-| `/ddaro:summary [name]` | 크래시 복구용 내용 기반 요약 |
-| `/ddaro:clean [name]` | merge 된 worktree 사후 정리 |
+| `/ddaro:summary [name]` | 읽기 전용 내용 요약 |
+| `/ddaro:resume` | worktree 선택 + 요약 + cd + paste prompt (크래시 복구 / 며칠 뒤 재개) |
+| `/ddaro:clear [name]` | merge 된 worktree 사후 정리 (v0.1.2에서 `/ddaro:clean`에서 rename) |
 | `/ddaro:abandon <name>` | 3겹 보호 후 완전 폐기 |
 | `/ddaro:setting` | 대화형 설정 메뉴 |
 | `/ddaro:config [key]` | 직접 설정 변경 |
@@ -61,7 +62,7 @@
 - **크래시 복구 context** — 매 commit 마다 `.ddaro/context/<sha>.md` 기록 + `CURRENT.md` 갱신. 세션/IDE 크래시 후 `/ddaro:summary` 한 번이면 복원.
 - **3겹 보호**:
   - 1층: `protected_worktrees` config 목록
-  - 2층: `.git/ddaro-owned` 소유권 플래그
+  - 2층: `.ddaro/OWNED` 소유권 플래그
   - 3층: `abandon` 시 `yes, I'm sure` 타이핑 확인
 - **네이밍 전략** — 숫자(기본), 또는 동물 / 한국 도시 / 미국 주 / 과일 / 그리스 문자. `/ddaro:setting` 에서 전환.
 - **언어 지원** — 모든 출력이 영어(기본) 또는 한국어. config 로 전환.
