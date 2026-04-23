@@ -80,6 +80,7 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 | `/ddaro:status` | worktree 안에선 로컬 상태, main 에선 `/ddaro:list` 로 자동 위임 |
 | `/ddaro:list` | 모든 worktree 를 tier 별로 그룹핑 (owned / adopted / unmanaged / protected / external) |
 | `/ddaro:resume [name] [--recap-only] [--all]` | worktree 선택 + 요약 + cd + paste prompt. `--recap-only` 는 읽기 전용 (이전 `/ddaro:summary` 대체) |
+| `/ddaro:adopt <path>` | 기존 non-ddaro worktree 를 ddaro 관리로 편입 (`.ddaro/` overlay 설치, `adopted=true` 표시) |
 | `/ddaro:clear [name]` | merge 된 worktree 사후 정리 (유일한 제거 경로 — main 에서만 실행) |
 | `/ddaro:abandon <name> [--force]` | 3겹 보호 후 완전 폐기. adopted 대상은 `--force` 필수 |
 | `/ddaro:config [key] [value]` | 인자 없으면 대화형 메뉴, 있으면 직접 설정. main_protection 훅도 토글 |
@@ -93,7 +94,7 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 - **물리 격리** - 각 작업은 독립 git worktree + 독립 폴더. 병렬 Claude 세션 간 충돌 원천 차단.
 - **삭제 검증 commit** - diff의 삭제 라인을 분류 (교체 / 포맷 / 순수 삭제 / 함수 제거 / 100줄+) 하여 위험한 것만 확인받음.
 - **규모별 merge 처리** - small / medium / large diff 각각에 단계적으로 더 엄격한 deletion 스캔 적용. cross-plugin 리뷰 (`--review=triad` 또는 `--review=prism`) 는 opt-in 이며 해당 plugin 이 설치돼 있어야 작동. ddaro 는 다른 plugin 을 자동 호출하지 않음.
-- **크래시 복구 context** - 매 commit 마다 `.ddaro/context/<sha>.md` 기록 + `CURRENT.md` 갱신. 세션/IDE 크래시 후 `/ddaro:summary` 한 번이면 복원.
+- **크래시 복구 context** - 매 commit 마다 `.ddaro/context/<sha>.md` 기록 + `CURRENT.md` 갱신. 세션/IDE 크래시 후 `/ddaro:resume` (또는 읽기 전용 `/ddaro:resume --recap-only`) 한 번이면 복원.
 - **3겹 보호**:
   - 1층: `protected_worktrees` config 목록
   - 2층: `.ddaro/OWNED` 소유권 플래그
