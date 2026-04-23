@@ -2,11 +2,17 @@
 
 > Language: **English** · [한국어](README.ko.md)
 
-**Ever had two Claude Code sessions stomp on each other's code, or watched edits silently disappear?** ddaro physically isolates every session into its own worktree and branch so collisions cannot happen, and verifies nothing is being overwritten when you merge.
+**Run multiple AI coding sessions without ever corrupting your repo.**
 
-**Worktree-based parallel workflow for Claude Code.** Isolated branch work with deletion-aware commits, size-based merge review, and crash-recoverable context logs.
+AI coding has gone parallel. You run one Claude Code session for billing, another for auth, a third to experiment. But git was designed for humans doing one thing at a time, so two sessions touching the same working tree overwrite each other silently. ddaro is the session-isolation layer that rebuilds the git workflow for parallel AI development.
 
-When you run multiple Claude Code sessions at once - or just want to keep `main` spotless while experimenting - ddaro gives you disposable, safety-wrapped scratch worktrees. Each one has its own branch, its own lock, and its own on-disk memory so a session crash never loses context.
+```
+/ddaro:start   -> work safely      (new worktree + branch, one per session)
+/ddaro:commit  -> snapshot         (deletion-aware commit + auto-push + context MD)
+/ddaro:merge   -> review & merge   (size-based review + pre-flight conflict check)
+```
+
+Ever had multiple Claude Code sessions stomp on each other's code, or watched edits silently disappear? ddaro physically isolates every session into its own worktree and branch so collisions cannot happen, and verifies nothing is being overwritten when you merge.
 
 ---
 

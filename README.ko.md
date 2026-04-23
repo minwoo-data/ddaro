@@ -2,11 +2,17 @@
 
 > Language: [English](README.md) · **한국어**
 
-**여러 Claude Code 세션을 병렬로 돌리다 서로 코드를 덮어쓰거나, 작업이 조용히 사라진 적 있나요?** ddaro는 각 세션을 자기 worktree와 branch에 구조적으로 격리시켜 충돌을 사전에 차단하고, merge할 때 덮어쓰는 것이 없는지 자동으로 확인합니다.
+**여러 AI 코딩 세션을 돌려도 repo가 절대 꼬이지 않게.**
 
-**Worktree 기반 병렬 작업 플러그인.** Main을 건드리지 않고 격리된 worktree + branch 에서 작업, 삭제 검증 후 commit + push, 변경 규모별 자동 리뷰 후 merge. 세션/IDE 크래시 시에도 context MD 로 복원.
+AI 코딩은 이제 병렬이 기본입니다. billing 전용 Claude 세션, auth 전용 세션, 실험용 세션. 그런데 git은 한 사람이 하나씩 하던 시절에 설계된 도구라, 두 세션이 같은 working tree를 건드리면 서로를 조용히 덮어씁니다. ddaro는 병렬 AI 개발을 위해 git workflow를 새로 짠 세션 격리 레이어입니다.
 
-여러 Claude Code 세션을 동시에 돌릴 때, 또는 실험하면서 main 은 깨끗하게 유지하고 싶을 때 - ddaro 가 안전망 씌운 일회용 worktree 를 만들어줍니다. 각 worktree는 자기 branch, 자기 lock, 자기 디스크 메모리를 가져서 세션이 죽어도 맥락이 사라지지 않습니다.
+```
+/ddaro:start   -> 안전하게 작업   (세션당 worktree + branch 새로 생성)
+/ddaro:commit  -> 스냅샷         (삭제 검증 commit + auto-push + context MD)
+/ddaro:merge   -> 리뷰 + merge   (규모별 리뷰 + 충돌 사전 체크)
+```
+
+여러 Claude Code 세션이 서로 코드를 덮어쓰거나, 작업이 조용히 사라진 적 있나요? ddaro는 각 세션을 자기 worktree와 branch에 구조적으로 격리시켜 충돌을 사전에 차단하고, merge할 때 덮어쓰는 것이 없는지 자동으로 확인합니다.
 
 ---
 
