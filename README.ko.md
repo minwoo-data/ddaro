@@ -2,6 +2,8 @@
 
 > Language: [English](README.md) · **한국어**
 
+![ddaro — Parallel AI Coding, Without Collisions](docs/assets/hero.png)
+
 **여러 AI 코딩 세션을 돌려도 repo가 절대 꼬이지 않게.**
 
 AI 코딩은 이제 병렬이 기본입니다. billing 전용 Claude 세션, auth 전용 세션, 실험용 세션. 그런데 git은 한 사람이 하나씩 하던 시절에 설계된 도구라, 두 세션이 같은 working tree를 건드리면 서로를 조용히 덮어씁니다. ddaro는 병렬 AI 개발을 위해 git workflow를 새로 짠 세션 격리 레이어입니다.

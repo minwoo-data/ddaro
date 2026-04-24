@@ -2,6 +2,8 @@
 
 > Language: **English** · [한국어](README.ko.md)
 
+![ddaro — Parallel AI Coding, Without Collisions](docs/assets/hero.png)
+
 **Run multiple AI coding sessions without ever corrupting your repo.**
 
 AI coding has gone parallel. You run one Claude Code session for billing, another for auth, a third to experiment. But git was designed for humans doing one thing at a time, so two sessions touching the same working tree overwrite each other silently. ddaro is the session-isolation layer that rebuilds the git workflow for parallel AI development.
