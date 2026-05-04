@@ -48,19 +48,30 @@ def _level(cfg: dict) -> str:
     return "off"
 
 
-# Require `git` directly after the env assignment so a bypass set on an
-# unrelated earlier command in the same bash payload doesn't silently
-# bypass the protected `git commit`.
-_BYPASS_ENV_RE = re.compile(
-    r"(?:^|[;&|])\s*ALLOW_WORKTREE_BRANCH_MISMATCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+git\b"
+# Bypass scope: must be at the START of the same command segment as the
+# `git commit`. A bypass attached to an unrelated earlier segment
+# (e.g. `ALLOW_...=1 git status && git commit -m bad`) does NOT waive the
+# protected commit -- only the segment that contains the commit counts.
+_BYPASS_SEGMENT_PREFIX_RE = re.compile(
+    r"^\s*ALLOW_WORKTREE_BRANCH_MISMATCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+"
 )
+_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|&|\|")
 
 
-def _bypass_active(cmd: str) -> bool:
+def _segments(cmd: str) -> list[str]:
+    return [s for s in _SEGMENT_SPLIT_RE.split(cmd) if s.strip()]
+
+
+def _bypass_for_commit(cmd: str) -> bool:
+    """Bypass applies only if the SEGMENT containing `git commit` also starts
+    with ALLOW_WORKTREE_BRANCH_MISMATCH=<truthy>."""
     env_v = os.environ.get("ALLOW_WORKTREE_BRANCH_MISMATCH", "").strip()
     if env_v not in ("", "0", "false", "False"):
         return True
-    return bool(_BYPASS_ENV_RE.search(cmd))
+    for seg in _segments(cmd):
+        if _GIT_COMMIT_RE.search(seg):
+            return bool(_BYPASS_SEGMENT_PREFIX_RE.match(seg))
+    return False
 
 
 def _city_pool(cfg: dict) -> set[str]:
@@ -156,7 +167,7 @@ def main() -> int:
     if not cmd or not _GIT_COMMIT_RE.search(cmd):
         return 0
 
-    if _bypass_active(cmd):
+    if _bypass_for_commit(cmd):
         return 0
 
     cities = _city_pool(cfg)

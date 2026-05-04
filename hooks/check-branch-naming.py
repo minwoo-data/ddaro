@@ -67,24 +67,42 @@ def _branch_naming_level(cfg: dict) -> str:
     return "off"
 
 
-# Match an `ALLOW_NON_DDARO_BRANCH=<truthy> git ...` env-prefix immediately
-# preceding a `git` invocation, at the start of the bash command or after
-# `;`, `&&`, `|`. Requiring `git` directly after means a bypass set on an
-# unrelated earlier command (e.g. `ALLOW_...=1 echo hi && git checkout -b X`)
-# does NOT silently bypass the protected git command -- only this segment's
-# env counts.
-_BYPASS_ENV_RE = re.compile(
-    r"(?:^|[;&|])\s*ALLOW_NON_DDARO_BRANCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+git\b"
+# Match an `ALLOW_NON_DDARO_BRANCH=<truthy>` env-prefix at the START of a
+# command segment that ALSO contains the branch-creation -- so a bypass
+# attached to an unrelated earlier segment (`ALLOW_...=1 git status &&
+# git checkout -b X`) does not silently waive the protected branch.
+_BYPASS_SEGMENT_PREFIX_RE = re.compile(
+    r"^\s*ALLOW_NON_DDARO_BRANCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+"
 )
 
 
-def _bypass_active(cmd: str) -> bool:
-    # Either the parent process exported the env (rare but supported),
-    # or the user prefixed the protected git command with the env assignment.
+# Split a bash command into segments by control operators. We treat ; & |
+# (incl. && ||) as segment boundaries; a pipe just feeds output but each
+# pipe stage is still a separate command, so each gets its own bypass scope.
+_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|&|\|")
+
+
+def _segments(cmd: str) -> list[str]:
+    return [s for s in _SEGMENT_SPLIT_RE.split(cmd) if s.strip()]
+
+
+def _segment_bypass(segment: str) -> bool:
+    """True if THIS segment starts with a truthy ALLOW_NON_DDARO_BRANCH=..."""
+    return bool(_BYPASS_SEGMENT_PREFIX_RE.match(segment))
+
+
+def _bypass_for_branch_creation(cmd: str) -> bool:
+    """Bypass applies only if the SEGMENT containing the branch-creation
+    pattern also starts with ALLOW_NON_DDARO_BRANCH=<truthy>. A bypass set
+    on a different segment does not waive the protected one."""
+    # Parent-process env still works (rare but supported, e.g. CI export).
     env_v = os.environ.get("ALLOW_NON_DDARO_BRANCH", "").strip()
     if env_v not in ("", "0", "false", "False"):
         return True
-    return bool(_BYPASS_ENV_RE.search(cmd))
+    for seg in _segments(cmd):
+        if _extract_new_branch(seg) is not None:
+            return _segment_bypass(seg)
+    return False
 
 
 def _extract_new_branch(cmd: str) -> str | None:
@@ -169,7 +187,7 @@ def main() -> int:
     if not cmd:
         return 0
 
-    if _bypass_active(cmd):
+    if _bypass_for_branch_creation(cmd):
         return 0
 
     name = _extract_new_branch(cmd)
