@@ -1,7 +1,7 @@
 ---
 name: ddaro:config
-description: "Config access. No args → interactive 9-item menu. With args → direct key set (for users who know the keys). Also toggles the optional main_protection and branch_naming hooks (off/warn/strict)."
-argument-hint: "[menu (default) | show | init | main <path> | protect <path> | unprotect <path> | external <pattern> | naming <key> | pool <key> | language <en|ko> | context <true|false> | max <N> | main_protection <off|warn|strict> | branch_naming <off|warn|strict>]"
+description: "Config access. No args → interactive 9-item menu. With args → direct key set (for users who know the keys). Also toggles the optional protective hooks (main_protection / branch_naming / cross_worktree_check / branch_worktree_match)."
+argument-hint: "[menu (default) | show | init | main <path> | protect <path> | unprotect <path> | external <pattern> | naming <key> | pool <key> | language <en|ko> | context <true|false> | max <N> | main_protection <off|warn|strict> | branch_naming <off|warn|strict> | cross_worktree_check <on|off> | branch_worktree_match <off|warn|strict>]"
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
 ---
 
@@ -29,6 +29,13 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:config [ac
   - If moving from `off` → `strict`: preview the `.claude/settings.json` hook entry (`PreToolUse` Bash → `${CLAUDE_PLUGIN_ROOT}/hooks/check-branch-naming.py`) and prompt y/n/x to merge.
   - Allowed branch patterns when strict: `d-<city>` / `d-<city>/<topic>` / `feat|fix|chore|docs|refactor|test|style|build|ci|perf/<topic>-<city>` / `backup/d-<city>-<...>` / `main|master|develop` / `release/*` / `hotfix/*` / `ddaro/*` / `dependabot/*`.
   - One-shot bypass: `ALLOW_NON_DDARO_BRANCH=1 <your command>`.
+- `cross_worktree_check <on|off>` → toggle SessionStart drift report across all ddaro-managed worktrees. Reads `protected_worktrees` + `git worktree list` and reports per-worktree: tracked-deleted files, behind origin, uncommit count, stale (per `stale_days`). Silent when all clean (zero token cost).
+  - Writes the `cross_worktree_check` key in `.ddaro/config.json`.
+  - If `on`: preview the `.claude/settings.json` SessionStart hook entry (`${CLAUDE_PLUGIN_ROOT}/hooks/cross-worktree-health.py`) and prompt y/n/x to merge.
+- `branch_worktree_match <off|warn|strict>` → toggle the hook-based "commit on right worktree" guard. Blocks `git commit` when the worktree's city marker (e.g. `d-busan` from cwd `*-d-busan`) doesn't match the branch's city marker (e.g. branch `d-namyangju`). Catches the foot-gun where `git switch` jumps branches but the user forgot which physical worktree they were in.
+  - Writes the `branch_worktree_match` key in `.ddaro/config.json`.
+  - If `strict`: preview the `.claude/settings.json` PreToolUse Bash hook entry (`${CLAUDE_PLUGIN_ROOT}/hooks/check-worktree-branch-match.py`) and prompt y/n/x to merge.
+  - One-shot bypass: `ALLOW_WORKTREE_BRANCH_MISMATCH=1 <your command>`.
 - Unknown action → list valid actions.
 
 Removals and other fine-grained edits → edit config file manually (safety).
