@@ -187,24 +187,30 @@ def main() -> int:
     if not cmd:
         return 0
 
-    if _bypass_for_branch_creation(cmd):
-        return 0
-
-    name = _extract_new_branch(cmd)
-    if name is None:
-        return 0
-
     cities = _city_pool(cfg)
     if not cities:
         return 0  # no pool configured -> nothing to enforce
 
-    ok, reason = _is_allowed(name, cities)
-    if ok:
-        return 0
+    # Parent-process env bypass applies once to the whole payload (rare path).
+    env_v = os.environ.get("ALLOW_NON_DDARO_BRANCH", "").strip()
+    global_env_bypass = env_v not in ("", "0", "false", "False")
 
+    # Walk every segment independently. EACH branch-creation must be either
+    # allowed by name OR bypassed in its own segment. A bypass on one
+    # segment does NOT waive others.
     pool_name = str(cfg.get("name_pool") or "korea_city")
-    print(_refusal(name, reason, cmd, pool_name), file=sys.stderr)
-    return 2
+    for seg in _segments(cmd):
+        name = _extract_new_branch(seg)
+        if name is None:
+            continue
+        if global_env_bypass or _segment_bypass(seg):
+            continue
+        ok, reason = _is_allowed(name, cities)
+        if ok:
+            continue
+        print(_refusal(name, reason, cmd, pool_name), file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
