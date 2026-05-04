@@ -48,9 +48,16 @@ def _level(cfg: dict) -> str:
     return "off"
 
 
-def _bypass_active() -> bool:
-    v = os.environ.get("ALLOW_WORKTREE_BRANCH_MISMATCH", "")
-    return v.strip() not in ("", "0", "false", "False")
+_BYPASS_ENV_RE = re.compile(
+    r"(?:^|[;&|])\s*ALLOW_WORKTREE_BRANCH_MISMATCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+"
+)
+
+
+def _bypass_active(cmd: str) -> bool:
+    env_v = os.environ.get("ALLOW_WORKTREE_BRANCH_MISMATCH", "").strip()
+    if env_v not in ("", "0", "false", "False"):
+        return True
+    return bool(_BYPASS_ENV_RE.search(cmd))
 
 
 def _city_pool(cfg: dict) -> set[str]:
@@ -146,7 +153,7 @@ def main() -> int:
     if not cmd or not _GIT_COMMIT_RE.search(cmd):
         return 0
 
-    if _bypass_active():
+    if _bypass_active(cmd):
         return 0
 
     cities = _city_pool(cfg)

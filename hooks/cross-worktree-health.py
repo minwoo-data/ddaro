@@ -140,7 +140,10 @@ def main() -> int:
     if not main_path.exists():
         return 0
 
-    stale_days = int(cfg.get("stale_days") or 0)
+    try:
+        stale_days = int(cfg.get("stale_days") or 0)
+    except (TypeError, ValueError):
+        stale_days = 0
     worktrees = _enumerate_worktrees(cfg, main_path)
 
     lines: list[str] = []

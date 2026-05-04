@@ -38,11 +38,16 @@ from _shared import (  # noqa: E402
 )
 
 
-# Branch-creating git invocations. We extract the proposed name in main().
+# Branch-creating git invocations. Covers short + long flag forms and
+# both argument orders for `git worktree add`. The new-branch token is
+# whatever is captured by group(1).
 _BRANCH_CREATE_PATTERNS = [
-    re.compile(r"git\s+checkout\s+-b\s+(\S+)"),
-    re.compile(r"git\s+switch\s+-c\s+(\S+)"),
-    re.compile(r"git\s+branch\s+(?!--?)([^-\s][^\s]*)"),
+    re.compile(r"git\s+checkout\s+(?:--track\s+)?-b\s+(\S+)"),
+    re.compile(r"git\s+switch\s+(?:-c|--create)\s+(\S+)"),
+    re.compile(r"git\s+branch\s+(?:--track\s+)?(?!--?)([^-\s][^\s]*)"),
+    # `git worktree add -b <branch> <path>` (-b before path)
+    re.compile(r"git\s+worktree\s+add\s+(?:[^\s-]\S*\s+)?-b\s+(\S+)"),
+    # `git worktree add <path> -b <branch>` (path before -b)
     re.compile(r"git\s+worktree\s+add\s+\S+\s+-b\s+(\S+)"),
 ]
 
@@ -61,9 +66,21 @@ def _branch_naming_level(cfg: dict) -> str:
     return "off"
 
 
-def _bypass_active() -> bool:
-    v = os.environ.get("ALLOW_NON_DDARO_BRANCH", "")
-    return v.strip() not in ("", "0", "false", "False")
+# Match an `ALLOW_NON_DDARO_BRANCH=<truthy>` env-prefix at the start of the
+# bash command (or after `;`, `&&`, `|`). This is how users actually pass
+# the bypass in a Bash tool call -- the env never reaches our hook process.
+_BYPASS_ENV_RE = re.compile(
+    r"(?:^|[;&|])\s*ALLOW_NON_DDARO_BRANCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+"
+)
+
+
+def _bypass_active(cmd: str) -> bool:
+    # Either the parent process exported the env (rare but supported),
+    # or the user prefixed the command with the env assignment.
+    env_v = os.environ.get("ALLOW_NON_DDARO_BRANCH", "").strip()
+    if env_v not in ("", "0", "false", "False"):
+        return True
+    return bool(_BYPASS_ENV_RE.search(cmd))
 
 
 def _extract_new_branch(cmd: str) -> str | None:
@@ -148,7 +165,7 @@ def main() -> int:
     if not cmd:
         return 0
 
-    if _bypass_active():
+    if _bypass_active(cmd):
         return 0
 
     name = _extract_new_branch(cmd)
