@@ -48,8 +48,11 @@ def _level(cfg: dict) -> str:
     return "off"
 
 
+# Require `git` directly after the env assignment so a bypass set on an
+# unrelated earlier command in the same bash payload doesn't silently
+# bypass the protected `git commit`.
 _BYPASS_ENV_RE = re.compile(
-    r"(?:^|[;&|])\s*ALLOW_WORKTREE_BRANCH_MISMATCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+"
+    r"(?:^|[;&|])\s*ALLOW_WORKTREE_BRANCH_MISMATCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+git\b"
 )
 
 

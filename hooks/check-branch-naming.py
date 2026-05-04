@@ -39,16 +39,17 @@ from _shared import (  # noqa: E402
 
 
 # Branch-creating git invocations. Covers short + long flag forms and
-# both argument orders for `git worktree add`. The new-branch token is
-# whatever is captured by group(1).
+# any argument order for `git worktree add` (zero or more flags / paths
+# before -b). The new-branch token is captured by group(1).
 _BRANCH_CREATE_PATTERNS = [
     re.compile(r"git\s+checkout\s+(?:--track\s+)?-b\s+(\S+)"),
     re.compile(r"git\s+switch\s+(?:-c|--create)\s+(\S+)"),
     re.compile(r"git\s+branch\s+(?:--track\s+)?(?!--?)([^-\s][^\s]*)"),
-    # `git worktree add -b <branch> <path>` (-b before path)
-    re.compile(r"git\s+worktree\s+add\s+(?:[^\s-]\S*\s+)?-b\s+(\S+)"),
-    # `git worktree add <path> -b <branch>` (path before -b)
-    re.compile(r"git\s+worktree\s+add\s+\S+\s+-b\s+(\S+)"),
+    # `git worktree add [<flags-or-path>...] -b <branch> [<flags-or-path>...]`
+    # Captures the token after `-b` regardless of whether other flags or the
+    # path appear before or after.
+    re.compile(r"git\s+worktree\s+add\s+(?:\S+\s+)*-b\s+(\S+)"),
+    re.compile(r"git\s+worktree\s+add\s+\S+(?:\s+\S+)*\s+-b\s+(\S+)"),
 ]
 
 _SYSTEM_BRANCHES = {"main", "master", "develop"}
@@ -66,17 +67,20 @@ def _branch_naming_level(cfg: dict) -> str:
     return "off"
 
 
-# Match an `ALLOW_NON_DDARO_BRANCH=<truthy>` env-prefix at the start of the
-# bash command (or after `;`, `&&`, `|`). This is how users actually pass
-# the bypass in a Bash tool call -- the env never reaches our hook process.
+# Match an `ALLOW_NON_DDARO_BRANCH=<truthy> git ...` env-prefix immediately
+# preceding a `git` invocation, at the start of the bash command or after
+# `;`, `&&`, `|`. Requiring `git` directly after means a bypass set on an
+# unrelated earlier command (e.g. `ALLOW_...=1 echo hi && git checkout -b X`)
+# does NOT silently bypass the protected git command -- only this segment's
+# env counts.
 _BYPASS_ENV_RE = re.compile(
-    r"(?:^|[;&|])\s*ALLOW_NON_DDARO_BRANCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+"
+    r"(?:^|[;&|])\s*ALLOW_NON_DDARO_BRANCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+git\b"
 )
 
 
 def _bypass_active(cmd: str) -> bool:
     # Either the parent process exported the env (rare but supported),
-    # or the user prefixed the command with the env assignment.
+    # or the user prefixed the protected git command with the env assignment.
     env_v = os.environ.get("ALLOW_NON_DDARO_BRANCH", "").strip()
     if env_v not in ("", "0", "false", "False"):
         return True
