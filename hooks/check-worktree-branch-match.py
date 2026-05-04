@@ -55,7 +55,7 @@ def _level(cfg: dict) -> str:
 _BYPASS_SEGMENT_PREFIX_RE = re.compile(
     r"^\s*ALLOW_WORKTREE_BRANCH_MISMATCH=(?!0\b|false\b|False\b|\"\"|''|\s)\S*\s+"
 )
-_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|&|\|")
+_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|&|\||\n")
 
 
 def _segments(cmd: str) -> list[str]:

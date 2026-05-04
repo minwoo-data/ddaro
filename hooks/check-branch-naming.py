@@ -77,9 +77,12 @@ _BYPASS_SEGMENT_PREFIX_RE = re.compile(
 
 
 # Split a bash command into segments by control operators. We treat ; & |
-# (incl. && ||) as segment boundaries; a pipe just feeds output but each
-# pipe stage is still a separate command, so each gets its own bypass scope.
-_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|&|\|")
+# newline (and && ||) as segment boundaries; a pipe just feeds output but
+# each pipe stage is still a separate command, so each gets its own bypass
+# scope. Multi-line bash payloads (heredocs / scripts pasted into the Bash
+# tool) need newline splitting too -- otherwise a bypass on line 1 would
+# silently waive line 2's protected creation.
+_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|&|\||\n")
 
 
 def _segments(cmd: str) -> list[str]:
