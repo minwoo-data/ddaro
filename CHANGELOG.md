@@ -4,6 +4,17 @@ All notable changes to this plugin are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Branch-naming enforcement hook.** New optional guard `branch_naming` (off / warn / strict) blocks `git checkout -b <name>` / `git switch -c <name>` / `git branch <name>` / `git worktree add -b <name>` when the proposed branch doesn't follow the project's `name_pool` convention. `hooks/check-branch-naming.py` (PreToolUse Bash) reads `.ddaro/config.json` and validates against:
+  - `d-<city>` and `d-<city>/<topic>` (cities from active `name_pool`)
+  - `feat|fix|chore|docs|refactor|test|style|build|ci|perf/<topic>-<city>`
+  - `backup/d-<city>-<...>`
+  - `main` / `master` / `develop` / `release/*` / `hotfix/*` / `ddaro/*` / `dependabot/*`
+  Solves the "non-ddaro `git checkout -b <topic>` creates an orphan branch with no city marker, can't tell which worktree it came from later" problem. Set up via `/ddaro:start` Step 7 prompt (defaults to `strict`) or `/ddaro:config branch_naming <off|warn|strict>` after the fact. One-shot bypass: `ALLOW_NON_DDARO_BRANCH=1 <cmd>`. Fails open when `.ddaro/config.json` is missing or `branch_naming` is `off`.
+
 ## [0.3.1] - 2026-04-23
 
 Install-blocking fix. 0.3.0 refused to install against recent Claude Code builds with "Validation errors: hooks: Invalid input". The plugin.json field `"hooks": "./hooks/"` (a directory path) does not match the hooks schema, which expects event/matcher/command entries. Our hook scripts are installed imperatively by `/ddaro:config main_protection strict` (merged into the user's `.claude/settings.json`), not auto-loaded by the plugin manifest, so the field was never doing anything useful. It has been removed.

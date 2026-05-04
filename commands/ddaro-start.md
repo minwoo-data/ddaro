@@ -30,7 +30,12 @@ The first run MUST pin down which folder is `main` before anything else happens.
    - Default pick when user hits Enter: **strict**.
    - If `strict` or `warn`: internally invoke the same flow as `/ddaro:config main_protection <level>` — preview the `.claude/settings.json` hook entries (PreToolUse: Bash → check-main-bash.py, Edit/Write/NotebookEdit → check-main-edit.py) and merge them in. Preserve any existing hooks via sentinel markers. `off` → skip entirely and note "you can enable later with `/ddaro:config main_protection strict`".
    - Write the chosen level into `<main>/.ddaro/config.json`.
-4. If cwd == main (step 1 = yes), print "Setup complete — continuing with worktree creation below" and fall through to Phase B. Otherwise Phase A already stopped above (config + hook are in place; user will cd to main and re-run start).
+4. **Step 7 — branch_naming prompt** (new; enforces `name_pool` even on non-ddaro branch creations):
+   - Ask: "Install the branch-naming hook? This blocks `git checkout -b` / `switch -c` / `branch <name>` / `worktree add -b` from creating branches outside the `name_pool` convention so any branch you create is traceable to a city marker. ddaro-created branches always pass; system branches (main / master / develop / release/* / hotfix/* / ddaro/* / dependabot/*) always pass. One-shot bypass: `ALLOW_NON_DDARO_BRANCH=1 <cmd>`.  [**strict** (recommended) / off]"
+   - Default pick when user hits Enter: **strict**.
+   - If `strict`: invoke the same flow as `/ddaro:config branch_naming strict` — preview the `.claude/settings.json` hook entry (PreToolUse Bash → check-branch-naming.py) and merge it. `off` → note "you can enable later with `/ddaro:config branch_naming strict`".
+   - Write the chosen level into `<main>/.ddaro/config.json`.
+5. If cwd == main (step 1 = yes), print "Setup complete — continuing with worktree creation below" and fall through to Phase B. Otherwise Phase A already stopped above (config + hook are in place; user will cd to main and re-run start).
 
 ### Phase B — cwd-is-main precondition (every subsequent run)
 
