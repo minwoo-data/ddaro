@@ -633,9 +633,12 @@ adopt → commit (repeat) → merge → clear
 
 ---
 
-## /ddaro:commit [message]
+## /ddaro:commit [--verify] [message]
 
 Repeatable per edit chunk. Each call writes a context snapshot.
+
+**Flags**:
+- `--verify` *(new in 0.4.0)* - run the project's verify command(s) on the staged changes before committing. Discovery + routing rules are in step 5.5 below. Without this flag, /ddaro:commit behaves exactly as 0.3.x did.
 
 1. **Lock validation**: if current branch ≠ lock.branch, print the discrepancy, prompt y/n, default abort.
 2. **Main-worktree refusal**: if cwd is `main_worktree`, stop and tell the user to run `/ddaro:start`.
@@ -660,6 +663,62 @@ Repeatable per edit chunk. Each call writes a context snapshot.
    
    y / n / abort
    ```
+
+5.5. **Verify** *(only when `--verify` flag is set; new in 0.4.0)*:
+
+   Discover and run the project's verify command(s) for the touched files. Block the commit on failure unless the user explicitly opts to keep changes uncommitted (see /ddaro:commit verify failure handling below).
+
+   **Discovery order** (first hit wins; rationale in commit history when v0.4.0 ships):
+
+   1. **`.ddaro/verify.json`** *(primary, canonical machine contract)*:
+      ```json
+      {
+        "commands": [
+          { "pattern": "**/*.py",            "run": "pytest -x -q" },
+          { "pattern": "**/*.js",            "run": "bash scripts/smoke-check.sh" },
+          { "pattern": "**/*.html",          "run": "bash scripts/smoke-check.sh" },
+          { "pattern": ".github/workflows/*","run": "actionlint" }
+        ],
+        "default": "echo '[INFO] no verify rule matched; skipping'"
+      }
+      ```
+      Patterns use git's pathspec glob. First matching pattern per touched file wins; the unique set of commands across all touched files runs in order.
+
+   2. **`.claude/CLAUDE.md` "Commands" section** *(fallback; best-effort)*:
+      Parse the first `## Commands` heading and read fenced code blocks (` ```bash ` or similar). Look for the canonical verify trio in this project's pattern:
+      - `python -m pytest` or `pytest` → Python verify
+      - `bash scripts/smoke-check.sh` or `npm test` → JS/HTML verify
+      - `npm run build:css` → static-asset verify
+      Route by touched file types (Python files → pytest, JS/HTML → smoke). If parsing is ambiguous (no fenced block, multiple candidates, no clear association), warn and skip to step 5.6.
+
+   3. **Skip with warning**: print `[WARN] --verify requested but no verify config found (.ddaro/verify.json absent; CLAUDE.md Commands section unparseable). Commit proceeds without verification.` Continue to step 6.
+
+   **Routing**: collect touched files via `git diff --cached --name-only`. For each rule, run the matched command once (not per file). Output is streamed live so the user sees progress.
+
+   **Stop conditions**:
+   - All commands exit 0 → proceed to step 6.
+   - Any command exits non-zero → trigger /ddaro:commit verify failure handling (see below).
+
+5.6. **Verify failure handling** *(when --verify command exits non-zero)*:
+
+   ```
+   Verify failed: <command> exited <code>
+   
+   Output (last 20 lines):
+     <stderr/stdout tail>
+   
+   Choose:
+     k - keep changes staged, abort commit (you can edit and retry)
+     d - drop changes (git restore --staged + git restore on touched files)
+     c - commit anyway (NOT recommended; bypasses the verify gate)
+   
+   [k/d/c] [k]:
+   ```
+
+   - **k (default)**: leave the staged changes in place, exit without commit. User edits, then re-runs `/ddaro:commit --verify`.
+   - **d**: unstage everything, then `git restore` the touched files to HEAD. Use with care - rollback is destructive.
+   - **c**: commit without re-running verify. Equivalent to running `/ddaro:commit` without `--verify`. Logged in the context MD as a verify-bypass for future audit.
+
 6. **Commit**: `git commit -m "<message>"`. If no message, auto-generate `ddaro: d-<name> - N files (+X -Y)` (ASCII hyphen so pre-commit hooks rejecting non-ASCII do not choke). If the hook still rejects, stop and ask the user for a message - never retry with `--no-verify`.
 7. **Push**: `git push origin d-<name>`. Every commit backs up to remote.
 8. **Context write** (if `context_persistence: true`):
