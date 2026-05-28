@@ -755,6 +755,36 @@ These are conventions, not gates. The runtime check that actually fails the comm
 
 Work complete, time to ship.
 
+**State machine** *(new in 0.4.0)*:
+
+```
+   IDLE
+    ↓ /ddaro:merge invoked
+   FETCHED          (origin/main pulled, conflicts dry-run-checked)
+    ↓
+   CHECKED          (deletion-scan + size band classified + final y/n confirmed)
+    ↓ PR path                                           ↓ --local path
+   CI_PENDING                                          MERGED (direct)
+    ↓
+   CI_PASS / CI_FAIL / CI_STUCK
+    ↓ PASS         ↓ FAIL                       ↓ STUCK
+   MERGED         user-confirmed fix loop      escalate to user
+                  (hard cap; see step 9.5b)
+    ↓
+   SYNCED         (local branch reset to origin/main after squash)
+```
+
+Terminal states: MERGED, SYNCED, ABORTED, ESCALATED.
+
+Forbidden transitions:
+- MERGED → CI_PENDING (re-running checks after the squash has already landed)
+- CHECKED → MERGED on PR path (must pass through CI_*)
+- any → MERGED from a non-FETCHED state (the origin/main fetch is the gate against TOCTOU between local check and remote merge)
+
+Stuck-state detection:
+- CI_STUCK = "no checks reported in 60 seconds since CI_PENDING transition". This is distinct from CI_FAIL and is NOT retried automatically (retrying on infra silence wastes the fix-loop budget). Escalate to the user with the PR URL.
+- Re-entry from a previous /ddaro:merge invocation that errored out is treated as idempotency: re-query PR state first (step 9c) and skip past any state already achieved.
+
 1. **Lock validation**.
 2. **Uncommitted check**: if present, offer:
    - Run `/ddaro:commit` first (recommended)
@@ -778,15 +808,83 @@ Work complete, time to ship.
 7. **Pure-deletion re-scan**: whole-diff check - anything that existed on main but disappears in the merge gets flagged.
 8. **Final y/n** from user.
 9. **Merge method**:
-   - **PR path (default)**: `gh pr create` → print PR URL → human reviews/merges on GitHub.
+   - **PR path (default)**: `gh pr create` → print PR URL → continue to step 9.5 for CI orchestration. (In 0.3.x this step ended here; 0.4.0 drives the PR through CI to the squash merge.)
      - Optional: include CURRENT.md's Journey section in PR body.
-   - **Local path** (`--local` flag): output the following copy-paste block to the user:
+   - **Local path** (`--local` flag): output the following copy-paste block to the user (skip step 9.5 entirely):
      ```
      Local merge - run in the main worktree:
        cd <main_worktree>
        git merge d-<name>
        git push
      ```
+
+9.5. **CI orchestration** *(PR path, new in 0.4.0)*:
+
+   The state machine at the top of this section is the authoritative reference; this step is its imperative form.
+
+   **a. PR detection / creation**: if a PR for the current branch already exists (`gh pr list --head <branch> --state open`), reuse it. Otherwise the PR was just created in step 9. Either way, record the PR number.
+
+   **b. CI polling loop**:
+
+   ```
+   loop, every 20 seconds:
+     state = gh pr view <N> --json statusCheckRollup,mergeStateStatus
+     case state.checks_status_set:
+       - empty + elapsed < 60s  → still dispatching, continue
+       - empty + elapsed ≥ 60s  → CI_STUCK, escalate (see 9.5d)
+       - {IN_PROGRESS}          → still running, continue
+       - {COMPLETED} + all SUCCESS → CI_PASS, advance to step 9.6
+       - {COMPLETED} + any FAILURE → CI_FAIL, advance to step 9.5c
+   timeout: 20 minutes wall clock. If exceeded, treat as CI_STUCK.
+   ```
+
+   Print a one-line progress every iteration so the user sees liveness: `[CI] PR #<N> in_progress (4m30s elapsed) — pytest, smoke`.
+
+   **c. CI_FAIL handling** *(hard cap on retries; details in step 9.5b / 9.5e)*:
+
+   On any check failure, present the failure summary to the user:
+
+   ```
+   CI failed on PR #<N>:
+     - <check name>: <conclusion> (<short error excerpt>)
+     - ...
+
+   Choose:
+     a - analyze + propose a fix (you confirm before commit + push)
+     s - skip CI, merge anyway (--admin override, NOT recommended)
+     e - escalate, abort /ddaro:merge (you'll re-run when ready)
+
+   [a/s/e] [a]:
+   ```
+
+   - **a**: claude reads the failed-job logs (`gh run view --log-failed`), proposes a fix, applies it after user confirm, commits via `/ddaro:commit` (chunked, atomic), `git push --force-with-lease`, returns to step 9.5b. Increment `fix_attempts` counter.
+   - **s**: only available if `gh pr merge --admin` is allowed for the user; print the command but require user to execute (confirm gate in step 9.6).
+   - **e**: print PR URL + current state. Exit /ddaro:merge cleanly.
+
+   **d. CI_STUCK handling**: no check rollup populated within 60 seconds of PR head update. Do NOT consume a fix-loop slot for this. Print:
+
+   ```
+   CI did not start within 60s on PR #<N> (head <sha7>).
+   Possible causes:
+     - webhook delivery delay (rare)
+     - paths-ignore filter excluded all changed files
+     - GitHub Actions queue/incident
+
+   Options:
+     w - wait another 60s (one-shot)
+     d - trigger manually via `gh workflow run`
+     e - escalate, abort
+
+   [w/d/e] [w]:
+   ```
+
+   **e. Fix-loop cap**: `fix_attempts` starts at 0, incremented on each `a` choice in step 9.5c. After 3 attempts, refuse another `a` and force the user to either accept the failure (`s`/`e`) or override the cap with `/ddaro:config ci_fix_cap <N>` and re-invoke /ddaro:merge. Three attempts is enough to fix obvious typos, missing imports, line-number drift; beyond that the failure is usually a design problem, not a fixable defect.
+
+   **f. Cap override** *(escape hatch)*: `/ddaro:config ci_fix_cap <N>` sets the cap for the current worktree (max 10). Documented as a per-worktree config, not global, so risky overrides do not leak across projects.
+
+9.6. **Squash merge** *(PR path, new in 0.4.0)*:
+
+   Once CI is green, drive the actual squash merge — see step 10 (post-merge) for cleanup. Idempotency, confirm gate, and `--force-with-lease` requirements live in step 10's new substeps (added in later commits).
 10. **Post-merge cleanup hand-off** (the merge never deletes its own worktree - see "cwd rules"):
     ```
     ✓ Merge complete: d-<name> → main (K commits, +X -Y)
