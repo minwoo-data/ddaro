@@ -884,7 +884,29 @@ Stuck-state detection:
 
 9.6. **Squash merge** *(PR path, new in 0.4.0)*:
 
-   Once CI is green, drive the actual squash merge — see step 10 (post-merge) for cleanup. Idempotency, confirm gate, and `--force-with-lease` requirements live in step 10's new substeps (added in later commits).
+   Once CI is green, drive the actual squash merge.
+
+   **a. Idempotency guard**: re-query `gh pr view <N> --json state` immediately before the merge call. If `state == MERGED`, skip the merge step entirely and jump to step 10 (post-merge sync). This catches the common case where another session merged the same PR between the CI_PASS observation and our merge attempt - re-merging would either fail noisily (best case) or create a duplicate squash on a stale base (worst case).
+
+   ```
+   IF gh pr view <N> --json state == "MERGED":
+     print "PR #<N> already merged; skipping merge step."
+     advance to step 10 (sync-main)
+   ELSE:
+     continue to 9.6b
+   ```
+
+   **b. Push safety** *(applies to all pushes during /ddaro:merge, not just here)*: every push initiated by /ddaro:merge (including the fix-loop pushes in step 9.5c) MUST use `git push --force-with-lease` rather than bare `--force`. Rationale: a parallel session may have pushed to the same branch between our local commit and the push. `--force-with-lease` aborts the push when the remote moved; bare `--force` overwrites the parallel work silently.
+
+   In practice the only forced pushes inside /ddaro:merge happen inside the fix-loop (after we amend or add a fix commit to address CI failure); the squash-merge itself is a regular `gh pr merge` call against the remote PR, so this safety invariant is mostly a constraint on the inner loop, not the final merge.
+
+   **c. Squash command** *(confirm gate added in later commit, D11)*:
+
+   ```
+   gh pr merge <N> --squash --delete-branch=false
+   ```
+
+   `--delete-branch=false` because the project's convention (per the `git-sync-main-after-merge` pattern documented in the ddaro README) is to reuse the same worktree/branch for the next chunk. The branch is reset to origin/main in step 10 (D12), not deleted.
 10. **Post-merge cleanup hand-off** (the merge never deletes its own worktree - see "cwd rules"):
     ```
     ✓ Merge complete: d-<name> → main (K commits, +X -Y)
