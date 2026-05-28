@@ -6,18 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-28
+
+Dev-cycle orchestration release. /ddaro:commit gains an opt-in `--verify` flag that runs the project's verify command(s) before committing, and /ddaro:merge grows a full CI orchestration phase (state machine, hard-capped fix loop, idempotency, confirm gate, sync-main diff preview) so the PR-path can be driven from branch-ready all the way to local-branch-synced. Three pre-existing hooks (branch_naming, cross_worktree_check, branch_worktree_match) that were queued in `[Unreleased]` ship in this release too.
+
 ### Added
 
-- **Branch-naming enforcement hook.** New optional guard `branch_naming` (off / warn / strict) blocks `git checkout -b <name>` / `git switch -c <name>` / `git branch <name>` / `git worktree add -b <name>` when the proposed branch doesn't follow the project's `name_pool` convention. `hooks/check-branch-naming.py` (PreToolUse Bash) reads `.ddaro/config.json` and validates against:
+- **`/ddaro:commit --verify` flag.** Opt-in. Runs the project's verify command(s) on the staged changes before committing. Discovery order: (1) `.ddaro/verify.json` primary (canonical machine contract with `commands: [{pattern, run}]` shape), (2) `.claude/CLAUDE.md` "Commands" section fallback (best-effort parse), (3) skip with warning. Routes by touched-file type from `git diff --cached --name-only`; each rule's command runs once with live-streamed output. On non-zero exit, the user gets a three-way choice: keep changes staged (default `k`), drop changes (`d`, runs `git restore`), or commit anyway (`c`, logged in the context MD for audit). Default behavior of /ddaro:commit (no flag) is byte-identical to 0.3.x.
+
+- **Cooperative invariants for /ddaro:commit sessions.** Documentation-only, surfaced as a preamble to the /ddaro:commit section: pre-edit `git log -- <file>` recheck (TOCTOU defense against parallel sessions), read-before-edit (relies on the harness's PreToolUse:Edit enforcer; surfaced via --verify's failure mode), prereq fixes split into their own atomic commits (don't smuggle unrelated bug fixes into the chunk commit).
+
+- **`/ddaro:merge` CI orchestration (PR path).** Step 9.5 polls `gh pr view --json statusCheckRollup` every 20s with a 20-minute wall-clock cap and live progress prints. On CI_FAIL, three-way user choice: analyze+fix (Claude reads `gh run view --log-failed`, proposes a fix, commits via /ddaro:commit, pushes `--force-with-lease`, increments `fix_attempts`), skip (`--admin` override hint), escalate (abort with PR URL). Hard cap on `fix_attempts` defaults to 3 (configurable via `/ddaro:config ci_fix_cap <N>`, range 1..10, per-worktree). A distinct CI_STUCK state ("no checks reported in 60s") does NOT consume a fix-loop slot — it escalates with a wait / manual-dispatch / abort menu, because retrying a code fix on infra silence wastes the budget.
+
+- **Explicit state machine for /ddaro:merge.** Documented at the top of the /ddaro:merge section: `IDLE → FETCHED → CHECKED → CI_PENDING → CI_PASS/FAIL/STUCK → MERGED → SYNCED`. Terminal states (MERGED, SYNCED, ABORTED, ESCALATED), forbidden transitions (no MERGED → CI_PENDING; no CHECKED → MERGED on PR path), and stuck-state semantics are enumerated so re-entry from a half-completed previous invocation is well-defined.
+
+- **Idempotency guard before squash merge.** Re-query `gh pr view <N> --json state` immediately before the merge call. If `state == MERGED`, skip the merge step and jump to step 10 (sync-main). Catches the TOCTOU window between CI_PASS observation and merge attempt that could otherwise produce a duplicate squash on a stale base.
+
+- **Confirm gate before `gh pr merge`.** Step 9.6c prints the exact command and waits on an explicit `y` (default `n`). Squash-merging is irreversible from the branch perspective; accidental Enter does not ship code.
+
+- **Post-merge sync-main with content-diff preview.** Step 11a (default in 0.4.0, paired with `--delete-branch=false`) shows the difference between origin/main and the local branch BEFORE resetting. Non-empty "local has, main doesn't" bucket = visible abort signal that the squash didn't capture the work. Matches the project-side `git sync-main` alias guard (content-diff, not ancestry), so behavior is consistent whether the user runs the alias or lets /ddaro:merge drive it.
+
+- **Push safety invariant.** All pushes initiated by /ddaro:merge (including fix-loop pushes) use `git push --force-with-lease` rather than bare `--force`. Parallel-session pushes are aborted instead of silently overwritten.
+
+- **`evidence_check` hook (`hooks/check-evidence.py`).** Opt-in PreToolUse hook on Edit / Write / NotebookEdit. Levels: `off` (default, silent), `warn` (print reminder to stderr, allow), `strict` (require fresh `.ddaro/evidence-token` within `evidence_token_ttl_seconds` mtime OR `ALLOW_NO_EVIDENCE=1` env var, else block with exit 2). The hook is honest about what it can't do — PreToolUse hooks don't see chat history — so "evidence" is an external sentinel the session opts in to (`touch .ddaro/evidence-token`). Pure stdlib Python. Fails open on any error. Toggle: `/ddaro:config evidence_check <off|warn|strict>`. Bypass: `ALLOW_NO_EVIDENCE=1 <cmd>`.
+
+- **Branch-naming enforcement hook.** *(was in [Unreleased] queue, shipping now)* New optional guard `branch_naming` (off / warn / strict) blocks `git checkout -b <name>` / `git switch -c <name>` / `git branch <name>` / `git worktree add -b <name>` when the proposed branch doesn't follow the project's `name_pool` convention. `hooks/check-branch-naming.py` (PreToolUse Bash) reads `.ddaro/config.json` and validates against:
   - `d-<city>` and `d-<city>/<topic>` (cities from active `name_pool`)
   - `feat|fix|chore|docs|refactor|test|style|build|ci|perf/<topic>-<city>`
   - `backup/d-<city>-<...>`
   - `main` / `master` / `develop` / `release/*` / `hotfix/*` / `ddaro/*` / `dependabot/*`
   Solves the "non-ddaro `git checkout -b <topic>` creates an orphan branch with no city marker, can't tell which worktree it came from later" problem. Set up via `/ddaro:start` Step 7 prompt (defaults to `strict`) or `/ddaro:config branch_naming <off|warn|strict>` after the fact. One-shot bypass: `ALLOW_NON_DDARO_BRANCH=1 <cmd>`. Fails open when `.ddaro/config.json` is missing or `branch_naming` is `off`.
 
-- **Cross-worktree health check (SessionStart).** New optional guard `cross_worktree_check` (on / off). At every Claude Code session start, scans every ddaro-managed worktree (`protected_worktrees` + `git worktree list`) and reports per-worktree any of: tracked-deleted files, behind cached origin, uncommit count, stale (per `stale_days`). Silent when all clean (zero token cost). Catches the foot-gun where you forget you have uncommit work in another physical worktree. `hooks/cross-worktree-health.py`. Set up via `/ddaro:start` Step 8 prompt (defaults to `on`) or `/ddaro:config cross_worktree_check <on|off>`.
+- **Cross-worktree health check (SessionStart).** *(was in [Unreleased] queue, shipping now)* New optional guard `cross_worktree_check` (on / off). At every Claude Code session start, scans every ddaro-managed worktree (`protected_worktrees` + `git worktree list`) and reports per-worktree any of: tracked-deleted files, behind cached origin, uncommit count, stale (per `stale_days`). Silent when all clean (zero token cost). Catches the foot-gun where you forget you have uncommit work in another physical worktree. `hooks/cross-worktree-health.py`. Set up via `/ddaro:start` Step 8 prompt (defaults to `on`) or `/ddaro:config cross_worktree_check <on|off>`.
 
-- **Worktree-branch match check.** New optional guard `branch_worktree_match` (off / warn / strict) blocks `git commit` when the worktree's city marker (extracted from cwd basename, e.g. `*-d-busan`) doesn't match the current branch's city marker (e.g. branch `d-namyangju`). Catches the foot-gun where `git switch` jumped branches but the user forgot which physical worktree they were in. `hooks/check-worktree-branch-match.py` (PreToolUse Bash). Set up via `/ddaro:start` Step 9 prompt (defaults to `strict`) or `/ddaro:config branch_worktree_match <off|warn|strict>`. One-shot bypass: `ALLOW_WORKTREE_BRANCH_MISMATCH=1 <cmd>`. Skips when either side has no city marker (e.g. main worktree, or a system branch like `main` -- those are handled by `main_protection` and `branch_naming` respectively).
+- **Worktree-branch match check.** *(was in [Unreleased] queue, shipping now)* New optional guard `branch_worktree_match` (off / warn / strict) blocks `git commit` when the worktree's city marker (extracted from cwd basename, e.g. `*-d-busan`) doesn't match the current branch's city marker (e.g. branch `d-namyangju`). Catches the foot-gun where `git switch` jumped branches but the user forgot which physical worktree they were in. `hooks/check-worktree-branch-match.py` (PreToolUse Bash). Set up via `/ddaro:start` Step 9 prompt (defaults to `strict`) or `/ddaro:config branch_worktree_match <off|warn|strict>`. One-shot bypass: `ALLOW_WORKTREE_BRANCH_MISMATCH=1 <cmd>`. Skips when either side has no city marker (e.g. main worktree, or a system branch like `main` -- those are handled by `main_protection` and `branch_naming` respectively).
+
+### Changed
+
+- **`/ddaro:merge` default merge cleanup is now reuse-branch.** The post-merge hand-off (steps 10/11) now defaults to the reuse-branch path (`--delete-branch=false` on the squash command, content-diff preview before `git reset --hard origin/main`), matching the project-side `git sync-main` pattern documented in the README. The legacy delete-branch path is preserved as an opt-in alternative for users who prefer the one-worktree-per-PR convention.
+
+### Config
+
+New keys (all per-worktree, all opt-in / safe defaults):
+
+- `evidence_check` (off / warn / strict, default `off`)
+- `evidence_token_ttl_seconds` (30..86400, default 300)
+- `ci_fix_cap` (1..10, default 3)
+- `cross_worktree_check` (on / off, default `on` per first-time setup, persisted user choice thereafter)
+- `branch_naming` (off / warn / strict)
+- `branch_worktree_match` (off / warn / strict)
 
 ## [0.3.1] - 2026-04-23
 

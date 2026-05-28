@@ -63,9 +63,10 @@ You fire up Session A to fix billing and Session B to refactor auth. Both edit `
 ### 3. Use
 
 ```
-/ddaro:start           # creates a new isolated worktree (first run prompts for setup)
-/ddaro:commit          # safe commit + push + context snapshot
-/ddaro:merge           # size-based review + merge + cleanup
+/ddaro:start                  # creates a new isolated worktree (first run prompts for setup)
+/ddaro:commit                 # safe commit + push + context snapshot
+/ddaro:commit --verify        # ...plus run the project's verify command(s) first (new in 0.4.0)
+/ddaro:merge                  # size-based review + CI orchestration + merge + sync-main (new in 0.4.0)
 ```
 
 Restart Claude Code after install/update.
@@ -77,15 +78,15 @@ Restart Claude Code after install/update.
 | Command | What it does |
 |---|---|
 | `/ddaro:start [name]` | Create a new worktree + branch + lock |
-| `/ddaro:commit [msg]` | Stage all, classify deletions, confirm flagged, commit, push, write context MD |
-| `/ddaro:merge` | Pre-flight conflict check, size-based review, merge, y/n cleanup |
+| `/ddaro:commit [--verify] [msg]` | Stage all, classify deletions, confirm flagged, optionally run the project's verify command(s) (new in 0.4.0), commit, push, write context MD |
+| `/ddaro:merge` | Pre-flight conflict check + size-based review + CI orchestration (new in 0.4.0): polls `gh pr view --json statusCheckRollup`, handles CI_FAIL via a 3-attempt fix loop with `--force-with-lease`, escalates CI_STUCK ("no checks in 60s") separately, idempotency-guarded squash with confirm gate, then sync-main with content-diff preview. |
 | `/ddaro:status` | In-worktree: local state. In main: auto-delegates to `/ddaro:list`. |
 | `/ddaro:list` | All worktrees grouped by tier (owned / adopted / unmanaged / protected / external) |
 | `/ddaro:resume [name] [--recap-only] [--all]` | Pick a worktree + recap + cd + paste prompt. `--recap-only` = read-only summary (replaces old `/ddaro:summary`). |
 | `/ddaro:adopt <path>` | Bring an existing non-ddaro worktree under ddaro management (plants `.ddaro/` overlay, marks `adopted=true`). |
 | `/ddaro:clear [name]` | Delete merged worktrees post-hoc (the single cleanup path — must run from main) |
 | `/ddaro:abandon <name> [--force]` | 3-layer guarded force-discard. `--force` required for adopted targets. |
-| `/ddaro:config [key] [value]` | No args → interactive menu. With args → direct key set. Also toggles main_protection hook. |
+| `/ddaro:config [key] [value]` | No args → interactive menu. With args → direct key set. Toggles main_protection / branch_naming / cross_worktree_check / branch_worktree_match / **evidence_check** (new in 0.4.0) / ci_fix_cap hooks. |
 
 Also callable as `/ddaro <subcommand>`.
 

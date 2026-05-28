@@ -1,7 +1,7 @@
 ---
 name: ddaro
-description: "Worktree-based parallel workflow. Create isolated worktree + branch, adopt existing worktrees, commit with deletion-aware checks, review and merge to main by diff size, recover from session/IDE crashes via per-commit context MD. Subcommands: start / adopt / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
-version: "0.2.4"
+description: "Worktree-based parallel workflow with dev-cycle orchestration (0.4.0). Create isolated worktree + branch, adopt existing worktrees, commit with deletion-aware checks (now opt-in --verify), review and merge to main by diff size driven through CI (polling + hard-capped fix loop + idempotency + confirm gate + sync-main content-diff preview), recover from session/IDE crashes via per-commit context MD. Subcommands: start / adopt / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Hooks: main_protection / branch_naming / cross_worktree_check / branch_worktree_match / evidence_check (all opt-in, default off). Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
+version: "0.4.0"
 author: "haroom"
 repository: "https://github.com/minwoo-data/ddaro"
 license: "MIT"

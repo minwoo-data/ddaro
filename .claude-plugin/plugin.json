@@ -1,7 +1,7 @@
 {
   "name": "ddaro",
-  "version": "0.3.1",
-  "description": "Worktree-based parallel workflow for Claude Code sessions. 6-tier classification (main / owned / adopted / protected / unmanaged / external), /ddaro:adopt to bring existing worktrees under management, cwd-safe destructive commands (clear/abandon run from main only), merge hand-off, and main_protection hooks (default strict — prompted during first-time setup). /ddaro:start now runs a 6-step setup with explicit 'is cwd main?' confirmation. /ddaro:abandon accepts adopted targets via --force. Commands collapsed: setting→config (menu on no-args), summary→resume --recap-only. Korean triggers: /ddaro, 따로, 병렬로. English: /ddaro, parallel, isolated.",
+  "version": "0.4.0",
+  "description": "Worktree-based parallel workflow for Claude Code sessions with dev-cycle orchestration (new in 0.4.0). 6-tier classification (main / owned / adopted / protected / unmanaged / external), /ddaro:adopt, cwd-safe destructive commands (clear/abandon from main only), main_protection hooks, branch_naming + cross_worktree_check + branch_worktree_match guards. /ddaro:commit gains opt-in --verify flag (verify.json + CLAUDE.md fallback discovery). /ddaro:merge drives the PR path through CI: state machine, polling, hard-capped fix loop (default 3, configurable), CI_STUCK detection, idempotency guard, confirm gate, sync-main content-diff preview, --force-with-lease invariant. New opt-in evidence_check hook (off/warn/strict). Korean triggers: /ddaro, 따로, 병렬로. English: /ddaro, parallel, isolated.",
   "author": {
     "name": "haroom",
     "url": "https://github.com/minwoo-data"
