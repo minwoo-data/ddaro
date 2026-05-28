@@ -900,14 +900,33 @@ Stuck-state detection:
 
    In practice the only forced pushes inside /ddaro:merge happen inside the fix-loop (after we amend or add a fix commit to address CI failure); the squash-merge itself is a regular `gh pr merge` call against the remote PR, so this safety invariant is mostly a constraint on the inner loop, not the final merge.
 
-   **c. Squash command** *(confirm gate added in later commit, D11)*:
+   **c. Confirm gate before merge** *(new in 0.4.0)*:
+
+   Squash-merging is irreversible from the perspective of the PR branch (the unsquashed history disappears from `main`'s view). Before executing the merge, print the exact command and require an explicit user `y` to proceed:
 
    ```
-   gh pr merge <N> --squash --delete-branch=false
+   Ready to squash-merge PR #<N>:
+     gh pr merge <N> --squash --delete-branch=false
+
+   Branch: d-<name>  →  main
+   Commits to squash: K
+   Net change:        +X -Y lines, N files
+
+   Proceed?  [y/n] [n]:
    ```
 
-   `--delete-branch=false` because the project's convention (per the `git-sync-main-after-merge` pattern documented in the ddaro README) is to reuse the same worktree/branch for the next chunk. The branch is reset to origin/main in step 10 (D12), not deleted.
+   Default is `n` so accidental Enter does not merge. The state machine treats `n` as ABORTED (terminal); the user re-runs /ddaro:merge when ready. This matches the `/ddaro:clear` UX convention: irreversible actions print + wait, never auto-execute.
+
+   `--delete-branch=false` because the project's convention (per the `git-sync-main-after-merge` pattern documented in the ddaro README) is to reuse the same worktree/branch for the next chunk. The branch is reset to origin/main in step 10 (see D12 cleanup hand-off), not deleted.
 10. **Post-merge cleanup hand-off** (the merge never deletes its own worktree - see "cwd rules"):
+
+    **Reuse-branch cleanup (default in 0.4.0)** *(when `--delete-branch=false` was passed in step 9.6c)*:
+
+    The default convention is to reset the local branch onto origin/main so the same worktree can be used for the next chunk. Step 11a shows the diff before applying.
+
+    **Delete-branch cleanup (legacy 0.3.x path)** *(when explicitly opted in)*:
+
+    Same hand-off block as 0.3.x:
     ```
     ✓ Merge complete: d-<name> → main (K commits, +X -Y)
     ✓ Pushed to remote
@@ -918,7 +937,36 @@ Stuck-state detection:
 
     y/n [y]:
     ```
-11. **`y` path — hand-off block** (no delete is executed here):
+
+11. **`y` path** (no delete is executed here):
+
+    **a. Reuse-branch path — sync-main diff preview** *(new in 0.4.0)*:
+
+    Before resetting the local branch onto origin/main, show what would change so the user can sanity-check that the squashed PR really captured the local work and that nothing else is being silently discarded:
+
+    ```
+    Squash merge landed as: <squash-commit-sha7>
+    Local branch head:      <local-commit-sha7>
+
+    Content diff (origin/main vs current branch):
+      <files differing, line counts>
+
+    Files in origin/main that the local branch doesn't have:
+      <file list, usually empty after a clean squash>
+    Files on the local branch that origin/main doesn't have:
+      <file list - if non-empty, your work didn't make it into the squash>
+
+    Reset local branch to origin/main?  [y/n] [y]:
+    ```
+
+    Default is `y` because the post-squash sync is the expected next step. A non-empty "local has, main doesn't" list is the danger signal - the user should abort and investigate before reset. Implementation note: this preview matches the guard in the project's git sync-main alias (`!f() { ... if git merge-base --is-ancestor ... ; }`), so behavior is consistent whether the user runs the alias manually or lets /ddaro:merge drive it.
+
+    On `y`: `git fetch origin main && git reset --hard origin/main`. Branch now mirrors main, ready for the next /ddaro:start equivalent OR for a new chunk on the same branch.
+
+    On `n`: leave the branch as-is. The user can inspect or run `/ddaro:clear` later.
+
+    **b. Delete-branch path — hand-off block** (the legacy 0.3.x flow):
+
     ```
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       Run this in your shell:
@@ -927,6 +975,7 @@ Stuck-state detection:
         /ddaro:clear <branch-or-name>
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ```
+
     Why hand-off instead of direct delete: on Windows, `git worktree remove` fails when cwd is inside the target. On Linux/macOS it succeeds but leaves the shell pointing at a vanished path. Removing the worktree only from main (via `/ddaro:clear`) avoids both problems and means there is exactly one code path that deletes worktrees.
 
 > **Archive option**: you may copy `.ddaro/context/` into `<main>/.ddaro/archive/d-<name>/` before removal. Default behavior skips archiving - commit log is the canonical history.
