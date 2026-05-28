@@ -247,6 +247,9 @@ Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config poo
 - **`language`**: `english` (default) or `korean`. Affects all subcommand output.
 - **`context_persistence`**: `true` (default) writes `.ddaro/context/*.md` per commit.
 - **`main_protection`** *(new in 0.2.4)*: `off` (default), `warn`, or `strict`. Controls whether hooks block direct mutation of the main worktree. See "Main protection hooks" below.
+- **`evidence_check`** *(new in 0.4.0)*: `off` (default), `warn`, or `strict`. Controls a PreToolUse hook on Edit/Write that nudges (warn) or requires (strict) a fresh evidence token before applying the change. See "Evidence-check hook" below.
+- **`evidence_token_ttl_seconds`** *(new in 0.4.0)*: integer 30..86400, default 300 (5 minutes). Lifetime of `.ddaro/evidence-token` before strict mode treats it as stale.
+- **`ci_fix_cap`** *(new in 0.4.0)*: integer 1..10, default 3. Cap on `analyze + fix + retry` iterations during /ddaro:merge CI failure recovery (step 9.5c). Per-worktree; risky overrides do not leak across projects.
 
 If config is missing, **the first `/ddaro:start` triggers the 5-step setup prompt**.
 
@@ -365,6 +368,60 @@ When a hook blocks an action, it prints the reason plus at least one way forward
      3) Disable strict protection:
           /ddaro:config main_protection off
 ```
+
+---
+
+## Evidence-check hook *(opt-in, new in 0.4.0)*
+
+`change-discipline`-style invariants (read the file before editing, grep for the symbol before adding it, scan recent git log for parallel writers) are widely useful but normally enforced via project rules / CLAUDE.md, not at the tool level. `evidence_check` promotes the convention to a PreToolUse hook that fires on Edit/Write/NotebookEdit and surfaces (or refuses) edits without evidence.
+
+### Levels
+
+| Level | PreToolUse (Edit/Write/NotebookEdit) | Bypass |
+|---|---|---|
+| `off` (default) | allow silently | n/a |
+| `warn` | print reminder to stderr, allow | n/a |
+| `strict` | require fresh `.ddaro/evidence-token` (mtime within `evidence_token_ttl_seconds`) OR `ALLOW_NO_EVIDENCE=1`, else **block** | `ALLOW_NO_EVIDENCE=1 <command>` (one-shot) |
+
+The hook does NOT inspect chat history (PreToolUse hooks cannot). The calling session opts in to the evidence pass by touching the token file:
+
+```bash
+touch .ddaro/evidence-token
+```
+
+A grep / Read / `git log` invocation can refresh the token automatically if the project wires it (via a separate hook, an IDE task, or a shell function on `g log` / `rg`). ddaro does NOT ship that wiring — the token contract is the deliberate abstraction. Different projects will source evidence from different tools (LSP, ctags, IDE Outline, AST grep, plain `git grep`), so freezing one is the wrong move.
+
+### Hook script
+
+`${CLAUDE_PLUGIN_ROOT}/hooks/check-evidence.py` — PreToolUse matching `Edit|Write|NotebookEdit`. Pure stdlib Python. Fails open on any error (parse error, missing config, etc.).
+
+### Enabling / disabling
+
+```bash
+/ddaro:config evidence_check warn      # or strict
+/ddaro:config evidence_check off       # default
+```
+
+Sample preview / settings.json merge mirrors the `main_protection` pattern: ddaro shows the `.claude/settings.json` entries it will add and asks y/n. Entries are tagged with a sentinel comment so `off` cleanly removes them without disturbing other users' hook entries.
+
+### Helpful refusal
+
+```
+🛑 Blocked by ddaro evidence_check=strict.
+   No fresh .ddaro/evidence-token (ttl=300s).
+   Establish evidence before Edit/Write:
+     - read the target file (Read tool),
+     - grep the symbol you're changing,
+     - or scan recent git log:  git log -n 3 -- <file>.
+   Then record the evidence pass:
+     touch .ddaro/evidence-token
+   Bypass once:    ALLOW_NO_EVIDENCE=1 <your-command>
+   Disable:        /ddaro:config evidence_check off
+```
+
+### Why default `off` (per codex Q3)
+
+Evidence is **generic as a capability, but project-specific as a policy.** Not every repo benefits from a token gate; some teams source evidence from tooling the hook can't see (LSP-backed editors, paired pair-programming sessions). Strict-by-default would be too aggressive; off-by-default lets each project opt in based on its own change-discipline posture.
 
 ---
 
@@ -1329,6 +1386,9 @@ Direct, script-friendly, one-line.
 | `/ddaro:config context <true\|false>` | Toggle context MD writes |
 | `/ddaro:config max <N>` | Change max concurrent |
 | `/ddaro:config main_protection <off\|warn\|strict>` | Toggle the hook-based main-worktree guard (installs/uninstalls `.claude/settings.json` entries with y/n confirm) |
+| `/ddaro:config evidence_check <off\|warn\|strict>` | *(new in 0.4.0)* Toggle the Edit/Write evidence-token gate (installs/uninstalls `.claude/settings.json` entries with y/n confirm) |
+| `/ddaro:config evidence_token_ttl_seconds <N>` | *(new in 0.4.0)* Lifetime of `.ddaro/evidence-token` for the strict gate (30..86400, default 300) |
+| `/ddaro:config ci_fix_cap <N>` | *(new in 0.4.0)* Per-worktree cap on /ddaro:merge CI fix-loop iterations (1..10, default 3) |
 
 Other removals / fine edits: edit config file manually.
 
