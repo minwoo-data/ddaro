@@ -640,6 +640,16 @@ Repeatable per edit chunk. Each call writes a context snapshot.
 **Flags**:
 - `--verify` *(new in 0.4.0)* - run the project's verify command(s) on the staged changes before committing. Discovery + routing rules are in step 5.5 below. Without this flag, /ddaro:commit behaves exactly as 0.3.x did.
 
+**Cooperative invariants for the calling session** *(new in 0.4.0; documentation, not runtime)*:
+
+ddaro's `1 worktree = 1 branch = 1 session` rule prevents the worst stomp. But within a single worktree, parallel sub-tools (background jobs, secondary shell, an OS-level file watcher) can still race the edit step. Sessions calling `/ddaro:commit` are expected to follow these invariants between edits to keep `/ddaro:commit` honest about what is actually being committed:
+
+1. **Pre-edit `git log -- <file>` recheck**: before editing a file you already read earlier in the session, re-check `git log --oneline -3 -- <file>`. A new entry since your last read means another writer touched the file - read the current version before applying your edit, or you will overwrite their commit.
+2. **Read-before-edit**: the Read tool must have observed the current on-disk content of a file before any Edit on that file in the same session. ddaro does not enforce this directly (the harness's `PreToolUse:Edit` hook is the canonical enforcer), but `--verify` will surface the mismatch indirectly: if you edited stale content, your diff will not pass the project's tests.
+3. **Prereq fixes split out**: if you discover an unrelated bug while implementing the current chunk (e.g. a missing import, a typo on a sibling line), commit the prereq fix as its own atomic commit *before* the chunk commit. This keeps the chunk commit reviewable and the prereq blamable on its own line.
+
+These are conventions, not gates. The runtime check that actually fails the commit is the `--verify` gate in step 5.5; these invariants reduce the false-positive rate of that gate by keeping your local edits aligned with the remote state.
+
 1. **Lock validation**: if current branch ≠ lock.branch, print the discrepancy, prompt y/n, default abort.
 2. **Main-worktree refusal**: if cwd is `main_worktree`, stop and tell the user to run `/ddaro:start`.
 3. **Stage**: `git add -A` (the `.ddaro/` directory is excluded via `<main_worktree>/.gitignore`).
