@@ -1,7 +1,7 @@
 ---
 name: ddaro
-description: "Worktree-based parallel workflow. Create isolated worktree + branch, adopt existing worktrees, commit with deletion-aware checks, review and merge to main by diff size, recover from session/IDE crashes via per-commit context MD. Subcommands: start / adopt / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
-version: "0.2.4"
+description: "Worktree-based parallel workflow with dev-cycle orchestration (0.4.0). Create isolated worktree + branch, adopt existing worktrees, commit with deletion-aware checks (now opt-in --verify), review and merge to main by diff size driven through CI (polling + hard-capped fix loop + idempotency + confirm gate + sync-main content-diff preview), recover from session/IDE crashes via per-commit context MD. Subcommands: start / adopt / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Hooks: main_protection / branch_naming / cross_worktree_check / branch_worktree_match / evidence_check (all opt-in, default off). Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
+version: "0.4.0"
 author: "haroom"
 repository: "https://github.com/minwoo-data/ddaro"
 license: "MIT"
@@ -247,6 +247,9 @@ Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config poo
 - **`language`**: `english` (default) or `korean`. Affects all subcommand output.
 - **`context_persistence`**: `true` (default) writes `.ddaro/context/*.md` per commit.
 - **`main_protection`** *(new in 0.2.4)*: `off` (default), `warn`, or `strict`. Controls whether hooks block direct mutation of the main worktree. See "Main protection hooks" below.
+- **`evidence_check`** *(new in 0.4.0)*: `off` (default), `warn`, or `strict`. Controls a PreToolUse hook on Edit/Write that nudges (warn) or requires (strict) a fresh evidence token before applying the change. See "Evidence-check hook" below.
+- **`evidence_token_ttl_seconds`** *(new in 0.4.0)*: integer 30..86400, default 300 (5 minutes). Lifetime of `.ddaro/evidence-token` before strict mode treats it as stale.
+- **`ci_fix_cap`** *(new in 0.4.0)*: integer 1..10, default 3. Cap on `analyze + fix + retry` iterations during /ddaro:merge CI failure recovery (step 9.5c). Per-worktree; risky overrides do not leak across projects.
 
 If config is missing, **the first `/ddaro:start` triggers the 5-step setup prompt**.
 
@@ -365,6 +368,60 @@ When a hook blocks an action, it prints the reason plus at least one way forward
      3) Disable strict protection:
           /ddaro:config main_protection off
 ```
+
+---
+
+## Evidence-check hook *(opt-in, new in 0.4.0)*
+
+`change-discipline`-style invariants (read the file before editing, grep for the symbol before adding it, scan recent git log for parallel writers) are widely useful but normally enforced via project rules / CLAUDE.md, not at the tool level. `evidence_check` promotes the convention to a PreToolUse hook that fires on Edit/Write/NotebookEdit and surfaces (or refuses) edits without evidence.
+
+### Levels
+
+| Level | PreToolUse (Edit/Write/NotebookEdit) | Bypass |
+|---|---|---|
+| `off` (default) | allow silently | n/a |
+| `warn` | print reminder to stderr, allow | n/a |
+| `strict` | require fresh `.ddaro/evidence-token` (mtime within `evidence_token_ttl_seconds`) OR `ALLOW_NO_EVIDENCE=1`, else **block** | `ALLOW_NO_EVIDENCE=1 <command>` (one-shot) |
+
+The hook does NOT inspect chat history (PreToolUse hooks cannot). The calling session opts in to the evidence pass by touching the token file:
+
+```bash
+touch .ddaro/evidence-token
+```
+
+A grep / Read / `git log` invocation can refresh the token automatically if the project wires it (via a separate hook, an IDE task, or a shell function on `g log` / `rg`). ddaro does NOT ship that wiring — the token contract is the deliberate abstraction. Different projects will source evidence from different tools (LSP, ctags, IDE Outline, AST grep, plain `git grep`), so freezing one is the wrong move.
+
+### Hook script
+
+`${CLAUDE_PLUGIN_ROOT}/hooks/check-evidence.py` — PreToolUse matching `Edit|Write|NotebookEdit`. Pure stdlib Python. Fails open on any error (parse error, missing config, etc.).
+
+### Enabling / disabling
+
+```bash
+/ddaro:config evidence_check warn      # or strict
+/ddaro:config evidence_check off       # default
+```
+
+Sample preview / settings.json merge mirrors the `main_protection` pattern: ddaro shows the `.claude/settings.json` entries it will add and asks y/n. Entries are tagged with a sentinel comment so `off` cleanly removes them without disturbing other users' hook entries.
+
+### Helpful refusal
+
+```
+🛑 Blocked by ddaro evidence_check=strict.
+   No fresh .ddaro/evidence-token (ttl=300s).
+   Establish evidence before Edit/Write:
+     - read the target file (Read tool),
+     - grep the symbol you're changing,
+     - or scan recent git log:  git log -n 3 -- <file>.
+   Then record the evidence pass:
+     touch .ddaro/evidence-token
+   Bypass once:    ALLOW_NO_EVIDENCE=1 <your-command>
+   Disable:        /ddaro:config evidence_check off
+```
+
+### Why default `off` (per codex Q3)
+
+Evidence is **generic as a capability, but project-specific as a policy.** Not every repo benefits from a token gate; some teams source evidence from tooling the hook can't see (LSP-backed editors, paired pair-programming sessions). Strict-by-default would be too aggressive; off-by-default lets each project opt in based on its own change-discipline posture.
 
 ---
 
@@ -633,9 +690,22 @@ adopt → commit (repeat) → merge → clear
 
 ---
 
-## /ddaro:commit [message]
+## /ddaro:commit [--verify] [message]
 
 Repeatable per edit chunk. Each call writes a context snapshot.
+
+**Flags**:
+- `--verify` *(new in 0.4.0)* - run the project's verify command(s) on the staged changes before committing. Discovery + routing rules are in step 5.5 below. Without this flag, /ddaro:commit behaves exactly as 0.3.x did.
+
+**Cooperative invariants for the calling session** *(new in 0.4.0; documentation, not runtime)*:
+
+ddaro's `1 worktree = 1 branch = 1 session` rule prevents the worst stomp. But within a single worktree, parallel sub-tools (background jobs, secondary shell, an OS-level file watcher) can still race the edit step. Sessions calling `/ddaro:commit` are expected to follow these invariants between edits to keep `/ddaro:commit` honest about what is actually being committed:
+
+1. **Pre-edit `git log -- <file>` recheck**: before editing a file you already read earlier in the session, re-check `git log --oneline -3 -- <file>`. A new entry since your last read means another writer touched the file - read the current version before applying your edit, or you will overwrite their commit.
+2. **Read-before-edit**: the Read tool must have observed the current on-disk content of a file before any Edit on that file in the same session. ddaro does not enforce this directly (the harness's `PreToolUse:Edit` hook is the canonical enforcer), but `--verify` will surface the mismatch indirectly: if you edited stale content, your diff will not pass the project's tests.
+3. **Prereq fixes split out**: if you discover an unrelated bug while implementing the current chunk (e.g. a missing import, a typo on a sibling line), commit the prereq fix as its own atomic commit *before* the chunk commit. This keeps the chunk commit reviewable and the prereq blamable on its own line.
+
+These are conventions, not gates. The runtime check that actually fails the commit is the `--verify` gate in step 5.5; these invariants reduce the false-positive rate of that gate by keeping your local edits aligned with the remote state.
 
 1. **Lock validation**: if current branch ≠ lock.branch, print the discrepancy, prompt y/n, default abort.
 2. **Main-worktree refusal**: if cwd is `main_worktree`, stop and tell the user to run `/ddaro:start`.
@@ -660,6 +730,62 @@ Repeatable per edit chunk. Each call writes a context snapshot.
    
    y / n / abort
    ```
+
+5.5. **Verify** *(only when `--verify` flag is set; new in 0.4.0)*:
+
+   Discover and run the project's verify command(s) for the touched files. Block the commit on failure unless the user explicitly opts to keep changes uncommitted (see /ddaro:commit verify failure handling below).
+
+   **Discovery order** (first hit wins; rationale in commit history when v0.4.0 ships):
+
+   1. **`.ddaro/verify.json`** *(primary, canonical machine contract)*:
+      ```json
+      {
+        "commands": [
+          { "pattern": "**/*.py",            "run": "pytest -x -q" },
+          { "pattern": "**/*.js",            "run": "bash scripts/smoke-check.sh" },
+          { "pattern": "**/*.html",          "run": "bash scripts/smoke-check.sh" },
+          { "pattern": ".github/workflows/*","run": "actionlint" }
+        ],
+        "default": "echo '[INFO] no verify rule matched; skipping'"
+      }
+      ```
+      Patterns use git's pathspec glob. First matching pattern per touched file wins; the unique set of commands across all touched files runs in order.
+
+   2. **`.claude/CLAUDE.md` "Commands" section** *(fallback; best-effort)*:
+      Parse the first `## Commands` heading and read fenced code blocks (` ```bash ` or similar). Look for the canonical verify trio in this project's pattern:
+      - `python -m pytest` or `pytest` → Python verify
+      - `bash scripts/smoke-check.sh` or `npm test` → JS/HTML verify
+      - `npm run build:css` → static-asset verify
+      Route by touched file types (Python files → pytest, JS/HTML → smoke). If parsing is ambiguous (no fenced block, multiple candidates, no clear association), warn and skip to step 5.6.
+
+   3. **Skip with warning**: print `[WARN] --verify requested but no verify config found (.ddaro/verify.json absent; CLAUDE.md Commands section unparseable). Commit proceeds without verification.` Continue to step 6.
+
+   **Routing**: collect touched files via `git diff --cached --name-only`. For each rule, run the matched command once (not per file). Output is streamed live so the user sees progress.
+
+   **Stop conditions**:
+   - All commands exit 0 → proceed to step 6.
+   - Any command exits non-zero → trigger /ddaro:commit verify failure handling (see below).
+
+5.6. **Verify failure handling** *(when --verify command exits non-zero)*:
+
+   ```
+   Verify failed: <command> exited <code>
+   
+   Output (last 20 lines):
+     <stderr/stdout tail>
+   
+   Choose:
+     k - keep changes staged, abort commit (you can edit and retry)
+     d - drop changes (git restore --staged + git restore on touched files)
+     c - commit anyway (NOT recommended; bypasses the verify gate)
+   
+   [k/d/c] [k]:
+   ```
+
+   - **k (default)**: leave the staged changes in place, exit without commit. User edits, then re-runs `/ddaro:commit --verify`.
+   - **d**: unstage everything, then `git restore` the touched files to HEAD. Use with care - rollback is destructive.
+   - **c**: commit without re-running verify. Equivalent to running `/ddaro:commit` without `--verify`. Logged in the context MD as a verify-bypass for future audit.
+
 6. **Commit**: `git commit -m "<message>"`. If no message, auto-generate `ddaro: d-<name> - N files (+X -Y)` (ASCII hyphen so pre-commit hooks rejecting non-ASCII do not choke). If the hook still rejects, stop and ask the user for a message - never retry with `--no-verify`.
 7. **Push**: `git push origin d-<name>`. Every commit backs up to remote.
 8. **Context write** (if `context_persistence: true`):
@@ -686,6 +812,36 @@ Repeatable per edit chunk. Each call writes a context snapshot.
 
 Work complete, time to ship.
 
+**State machine** *(new in 0.4.0)*:
+
+```
+   IDLE
+    ↓ /ddaro:merge invoked
+   FETCHED          (origin/main pulled, conflicts dry-run-checked)
+    ↓
+   CHECKED          (deletion-scan + size band classified + final y/n confirmed)
+    ↓ PR path                                           ↓ --local path
+   CI_PENDING                                          MERGED (direct)
+    ↓
+   CI_PASS / CI_FAIL / CI_STUCK
+    ↓ PASS         ↓ FAIL                       ↓ STUCK
+   MERGED         user-confirmed fix loop      escalate to user
+                  (hard cap; see step 9.5b)
+    ↓
+   SYNCED         (local branch reset to origin/main after squash)
+```
+
+Terminal states: MERGED, SYNCED, ABORTED, ESCALATED.
+
+Forbidden transitions:
+- MERGED → CI_PENDING (re-running checks after the squash has already landed)
+- CHECKED → MERGED on PR path (must pass through CI_*)
+- any → MERGED from a non-FETCHED state (the origin/main fetch is the gate against TOCTOU between local check and remote merge)
+
+Stuck-state detection:
+- CI_STUCK = "no checks reported in 60 seconds since CI_PENDING transition". This is distinct from CI_FAIL and is NOT retried automatically (retrying on infra silence wastes the fix-loop budget). Escalate to the user with the PR URL.
+- Re-entry from a previous /ddaro:merge invocation that errored out is treated as idempotency: re-query PR state first (step 9c) and skip past any state already achieved.
+
 1. **Lock validation**.
 2. **Uncommitted check**: if present, offer:
    - Run `/ddaro:commit` first (recommended)
@@ -709,16 +865,125 @@ Work complete, time to ship.
 7. **Pure-deletion re-scan**: whole-diff check - anything that existed on main but disappears in the merge gets flagged.
 8. **Final y/n** from user.
 9. **Merge method**:
-   - **PR path (default)**: `gh pr create` → print PR URL → human reviews/merges on GitHub.
+   - **PR path (default)**: `gh pr create` → print PR URL → continue to step 9.5 for CI orchestration. (In 0.3.x this step ended here; 0.4.0 drives the PR through CI to the squash merge.)
      - Optional: include CURRENT.md's Journey section in PR body.
-   - **Local path** (`--local` flag): output the following copy-paste block to the user:
+   - **Local path** (`--local` flag): output the following copy-paste block to the user (skip step 9.5 entirely):
      ```
      Local merge - run in the main worktree:
        cd <main_worktree>
        git merge d-<name>
        git push
      ```
+
+9.5. **CI orchestration** *(PR path, new in 0.4.0)*:
+
+   The state machine at the top of this section is the authoritative reference; this step is its imperative form.
+
+   **a. PR detection / creation**: if a PR for the current branch already exists (`gh pr list --head <branch> --state open`), reuse it. Otherwise the PR was just created in step 9. Either way, record the PR number.
+
+   **b. CI polling loop**:
+
+   ```
+   loop, every 20 seconds:
+     state = gh pr view <N> --json statusCheckRollup,mergeStateStatus
+     case state.checks_status_set:
+       - empty + elapsed < 60s  → still dispatching, continue
+       - empty + elapsed ≥ 60s  → CI_STUCK, escalate (see 9.5d)
+       - {IN_PROGRESS}          → still running, continue
+       - {COMPLETED} + all SUCCESS → CI_PASS, advance to step 9.6
+       - {COMPLETED} + any FAILURE → CI_FAIL, advance to step 9.5c
+   timeout: 20 minutes wall clock. If exceeded, treat as CI_STUCK.
+   ```
+
+   Print a one-line progress every iteration so the user sees liveness: `[CI] PR #<N> in_progress (4m30s elapsed) — pytest, smoke`.
+
+   **c. CI_FAIL handling** *(hard cap on retries; details in step 9.5b / 9.5e)*:
+
+   On any check failure, present the failure summary to the user:
+
+   ```
+   CI failed on PR #<N>:
+     - <check name>: <conclusion> (<short error excerpt>)
+     - ...
+
+   Choose:
+     a - analyze + propose a fix (you confirm before commit + push)
+     s - skip CI, merge anyway (--admin override, NOT recommended)
+     e - escalate, abort /ddaro:merge (you'll re-run when ready)
+
+   [a/s/e] [a]:
+   ```
+
+   - **a**: claude reads the failed-job logs (`gh run view --log-failed`), proposes a fix, applies it after user confirm, commits via `/ddaro:commit` (chunked, atomic), `git push --force-with-lease`, returns to step 9.5b. Increment `fix_attempts` counter.
+   - **s**: only available if `gh pr merge --admin` is allowed for the user; print the command but require user to execute (confirm gate in step 9.6).
+   - **e**: print PR URL + current state. Exit /ddaro:merge cleanly.
+
+   **d. CI_STUCK handling**: no check rollup populated within 60 seconds of PR head update. Do NOT consume a fix-loop slot for this. Print:
+
+   ```
+   CI did not start within 60s on PR #<N> (head <sha7>).
+   Possible causes:
+     - webhook delivery delay (rare)
+     - paths-ignore filter excluded all changed files
+     - GitHub Actions queue/incident
+
+   Options:
+     w - wait another 60s (one-shot)
+     d - trigger manually via `gh workflow run`
+     e - escalate, abort
+
+   [w/d/e] [w]:
+   ```
+
+   **e. Fix-loop cap**: `fix_attempts` starts at 0, incremented on each `a` choice in step 9.5c. After 3 attempts, refuse another `a` and force the user to either accept the failure (`s`/`e`) or override the cap with `/ddaro:config ci_fix_cap <N>` and re-invoke /ddaro:merge. Three attempts is enough to fix obvious typos, missing imports, line-number drift; beyond that the failure is usually a design problem, not a fixable defect.
+
+   **f. Cap override** *(escape hatch)*: `/ddaro:config ci_fix_cap <N>` sets the cap for the current worktree (max 10). Documented as a per-worktree config, not global, so risky overrides do not leak across projects.
+
+9.6. **Squash merge** *(PR path, new in 0.4.0)*:
+
+   Once CI is green, drive the actual squash merge.
+
+   **a. Idempotency guard**: re-query `gh pr view <N> --json state` immediately before the merge call. If `state == MERGED`, skip the merge step entirely and jump to step 10 (post-merge sync). This catches the common case where another session merged the same PR between the CI_PASS observation and our merge attempt - re-merging would either fail noisily (best case) or create a duplicate squash on a stale base (worst case).
+
+   ```
+   IF gh pr view <N> --json state == "MERGED":
+     print "PR #<N> already merged; skipping merge step."
+     advance to step 10 (sync-main)
+   ELSE:
+     continue to 9.6b
+   ```
+
+   **b. Push safety** *(applies to all pushes during /ddaro:merge, not just here)*: every push initiated by /ddaro:merge (including the fix-loop pushes in step 9.5c) MUST use `git push --force-with-lease` rather than bare `--force`. Rationale: a parallel session may have pushed to the same branch between our local commit and the push. `--force-with-lease` aborts the push when the remote moved; bare `--force` overwrites the parallel work silently.
+
+   In practice the only forced pushes inside /ddaro:merge happen inside the fix-loop (after we amend or add a fix commit to address CI failure); the squash-merge itself is a regular `gh pr merge` call against the remote PR, so this safety invariant is mostly a constraint on the inner loop, not the final merge.
+
+   **c. Confirm gate before merge** *(new in 0.4.0)*:
+
+   Squash-merging is irreversible from the perspective of the PR branch (the unsquashed history disappears from `main`'s view). Before executing the merge, print the exact command and require an explicit user `y` to proceed:
+
+   ```
+   Ready to squash-merge PR #<N>:
+     gh pr merge <N> --squash --delete-branch=false
+
+   Branch: d-<name>  →  main
+   Commits to squash: K
+   Net change:        +X -Y lines, N files
+
+   Proceed?  [y/n] [n]:
+   ```
+
+   Default is `n` so accidental Enter does not merge. The state machine treats `n` as ABORTED (terminal); the user re-runs /ddaro:merge when ready. This matches the `/ddaro:clear` UX convention: irreversible actions print + wait, never auto-execute.
+
+   `--delete-branch=false` because the project's convention (per the `git-sync-main-after-merge` pattern documented in the ddaro README) is to reuse the same worktree/branch for the next chunk. The branch is reset to origin/main in step 10 (see D12 cleanup hand-off), not deleted.
 10. **Post-merge cleanup hand-off** (the merge never deletes its own worktree - see "cwd rules"):
+
+    **Reuse-branch cleanup (default in 0.4.0)** *(when `--delete-branch=false` was passed in step 9.6c)*:
+
+    The default convention is to reset the local branch onto origin/main so the same worktree can be used for the next chunk. Step 11a shows the diff before applying.
+
+    **Delete-branch cleanup (legacy 0.3.x path)** *(when explicitly opted in)*:
+
+    Same hand-off block as 0.3.x:
     ```
     ✓ Merge complete: d-<name> → main (K commits, +X -Y)
     ✓ Pushed to remote
@@ -729,7 +994,36 @@ Work complete, time to ship.
 
     y/n [y]:
     ```
-11. **`y` path — hand-off block** (no delete is executed here):
+
+11. **`y` path** (no delete is executed here):
+
+    **a. Reuse-branch path — sync-main diff preview** *(new in 0.4.0)*:
+
+    Before resetting the local branch onto origin/main, show what would change so the user can sanity-check that the squashed PR really captured the local work and that nothing else is being silently discarded:
+
+    ```
+    Squash merge landed as: <squash-commit-sha7>
+    Local branch head:      <local-commit-sha7>
+
+    Content diff (origin/main vs current branch):
+      <files differing, line counts>
+
+    Files in origin/main that the local branch doesn't have:
+      <file list, usually empty after a clean squash>
+    Files on the local branch that origin/main doesn't have:
+      <file list - if non-empty, your work didn't make it into the squash>
+
+    Reset local branch to origin/main?  [y/n] [y]:
+    ```
+
+    Default is `y` because the post-squash sync is the expected next step. A non-empty "local has, main doesn't" list is the danger signal - the user should abort and investigate before reset. Implementation note: this preview matches the guard in the project's git sync-main alias (`!f() { ... if git merge-base --is-ancestor ... ; }`), so behavior is consistent whether the user runs the alias manually or lets /ddaro:merge drive it.
+
+    On `y`: `git fetch origin main && git reset --hard origin/main`. Branch now mirrors main, ready for the next /ddaro:start equivalent OR for a new chunk on the same branch.
+
+    On `n`: leave the branch as-is. The user can inspect or run `/ddaro:clear` later.
+
+    **b. Delete-branch path — hand-off block** (the legacy 0.3.x flow):
+
     ```
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       Run this in your shell:
@@ -738,6 +1032,7 @@ Work complete, time to ship.
         /ddaro:clear <branch-or-name>
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ```
+
     Why hand-off instead of direct delete: on Windows, `git worktree remove` fails when cwd is inside the target. On Linux/macOS it succeeds but leaves the shell pointing at a vanished path. Removing the worktree only from main (via `/ddaro:clear`) avoids both problems and means there is exactly one code path that deletes worktrees.
 
 > **Archive option**: you may copy `.ddaro/context/` into `<main>/.ddaro/archive/d-<name>/` before removal. Default behavior skips archiving - commit log is the canonical history.
@@ -1091,6 +1386,9 @@ Direct, script-friendly, one-line.
 | `/ddaro:config context <true\|false>` | Toggle context MD writes |
 | `/ddaro:config max <N>` | Change max concurrent |
 | `/ddaro:config main_protection <off\|warn\|strict>` | Toggle the hook-based main-worktree guard (installs/uninstalls `.claude/settings.json` entries with y/n confirm) |
+| `/ddaro:config evidence_check <off\|warn\|strict>` | *(new in 0.4.0)* Toggle the Edit/Write evidence-token gate (installs/uninstalls `.claude/settings.json` entries with y/n confirm) |
+| `/ddaro:config evidence_token_ttl_seconds <N>` | *(new in 0.4.0)* Lifetime of `.ddaro/evidence-token` for the strict gate (30..86400, default 300) |
+| `/ddaro:config ci_fix_cap <N>` | *(new in 0.4.0)* Per-worktree cap on /ddaro:merge CI fix-loop iterations (1..10, default 3) |
 
 Other removals / fine edits: edit config file manually.
 

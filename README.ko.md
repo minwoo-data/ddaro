@@ -63,9 +63,10 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 ### 3. 사용
 
 ```
-/ddaro:start           # 새 격리 worktree 생성 (첫 실행 시 설정 프롬프트)
-/ddaro:commit          # 안전 검증 + commit + push + context 스냅샷
-/ddaro:merge           # 규모별 리뷰 + merge + 정리
+/ddaro:start                  # 새 격리 worktree 생성 (첫 실행 시 설정 프롬프트)
+/ddaro:commit                 # 안전 검증 + commit + push + context 스냅샷
+/ddaro:commit --verify        # ...추가로 프로젝트의 verify 명령 실행 (0.4.0 new)
+/ddaro:merge                  # 규모별 리뷰 + CI 오케스트레이션 + merge + sync-main (0.4.0 new)
 ```
 
 설치/업데이트 후 Claude Code 재시작.
@@ -77,15 +78,15 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 | 명령 | 역할 |
 |---|---|
 | `/ddaro:start [name]` | 새 worktree + branch + lock 생성 |
-| `/ddaro:commit [msg]` | 전체 stage, 삭제 검증, 확인, commit, push, context MD 기록 |
-| `/ddaro:merge` | 충돌 사전 확인, 규모별 리뷰, merge, y/n 정리 |
+| `/ddaro:commit [--verify] [msg]` | 전체 stage, 삭제 검증, 확인, *0.4.0:* `--verify` 플래그 시 프로젝트 verify 명령 실행, commit, push, context MD 기록 |
+| `/ddaro:merge` | 충돌 사전 확인 + 규모별 리뷰 + *0.4.0:* CI 오케스트레이션 (state machine, `gh pr view` 폴링, CI_FAIL 시 hard cap 3회 fix 루프 + `--force-with-lease`, CI_STUCK 별도 처리, idempotency guard, confirm gate, sync-main content-diff preview) |
 | `/ddaro:status` | worktree 안에선 로컬 상태, main 에선 `/ddaro:list` 로 자동 위임 |
 | `/ddaro:list` | 모든 worktree 를 tier 별로 그룹핑 (owned / adopted / unmanaged / protected / external) |
 | `/ddaro:resume [name] [--recap-only] [--all]` | worktree 선택 + 요약 + cd + paste prompt. `--recap-only` 는 읽기 전용 (이전 `/ddaro:summary` 대체) |
 | `/ddaro:adopt <path>` | 기존 non-ddaro worktree 를 ddaro 관리로 편입 (`.ddaro/` overlay 설치, `adopted=true` 표시) |
 | `/ddaro:clear [name]` | merge 된 worktree 사후 정리 (유일한 제거 경로 — main 에서만 실행) |
 | `/ddaro:abandon <name> [--force]` | 3겹 보호 후 완전 폐기. adopted 대상은 `--force` 필수 |
-| `/ddaro:config [key] [value]` | 인자 없으면 대화형 메뉴, 있으면 직접 설정. main_protection 훅도 토글 |
+| `/ddaro:config [key] [value]` | 인자 없으면 대화형 메뉴, 있으면 직접 설정. main_protection / branch_naming / cross_worktree_check / branch_worktree_match / **evidence_check** (0.4.0 new) / ci_fix_cap 등을 토글 |
 
 `/ddaro <subcommand>` 형태로도 호출 가능.
 

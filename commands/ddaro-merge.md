@@ -1,6 +1,6 @@
 ---
 name: ddaro:merge
-description: "Merge ddaro or adopted branch to main with pre-flight conflict check, size-based review (triad/prism), pure-deletion scan, and cleanup hand-off (prints the cd + /ddaro:clear block; never deletes its own worktree)."
+description: "Merge ddaro or adopted branch to main with pre-flight conflict check, size-based review (triad/prism), pure-deletion scan, CI orchestration (PR path, new in 0.4.0), and cleanup hand-off (prints the cd + /ddaro:clear block; never deletes its own worktree)."
 argument-hint: "[--review=auto|skip|triad|prism|mangchi] [--local] [--pr]"
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
 ---
