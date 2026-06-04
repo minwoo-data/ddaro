@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Optional
@@ -74,3 +76,103 @@ def bypass_active() -> bool:
     """True if the user has set ALLOW_MAIN_DIRECT=1 (or any truthy value)."""
     v = os.environ.get("ALLOW_MAIN_DIRECT", "")
     return v.strip() not in ("", "0", "false", "False")
+
+
+# --- git commit detection -------------------------------------------------
+#
+# Shared by check-main-bash.py (main_protection) and
+# check-worktree-branch-match.py. A naive `git\s+commit` regex misses
+# `git -C <path> commit`, `git -c k=v commit`, `git --work-tree=<p> commit`
+# etc. (global options sit between `git` and the subcommand) and a `commit\b`
+# regex wrongly matches `git commit-graph`. This tokenizer skips global
+# options - consuming their arguments - and matches the `commit` subcommand
+# exactly, while also resolving the effective target worktree from
+# -C / --work-tree so main_protection can reason about WHERE a commit lands,
+# not just the cwd it was launched from. Best-effort; fails open (returns
+# "nothing found"), never raises.
+
+_SEG_SPLIT_RE = re.compile(r"&&|\|\||;|&|\||\n|`")
+
+# Global options that consume the FOLLOWING token as their argument when not
+# written in --opt=value form.
+_GIT_OPTS_WITH_ARG = {
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace",
+    "--exec-path", "--super-prefix", "--config-env",
+}
+# Global options whose value sets the working directory the commit lands in.
+_GIT_DIR_OPTS = {"-C", "--work-tree"}
+
+
+def _split_segments(command: str) -> list:
+    return [s for s in _SEG_SPLIT_RE.split(command) if s.strip()]
+
+
+def _tokenize(segment: str) -> list:
+    try:
+        return shlex.split(segment, posix=True)
+    except ValueError:
+        return segment.split()
+
+
+def _join_dir(cwd: Path, raw: str) -> Path:
+    try:
+        p = Path(raw)
+        return p if p.is_absolute() else (cwd / p)
+    except Exception:
+        return cwd
+
+
+def _scan_git_invocation(tokens: list, start: int, cwd: Path):
+    """Given everything after a `git` token, skip global options (consuming
+    their args) and return (target_dir, subcommand). target_dir reflects
+    -C / --work-tree overrides; subcommand is the first positional or None."""
+    target = cwd
+    i = start
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if not tok.startswith("-"):
+            return target, tok  # first positional token is the subcommand
+        key, eq, inline = tok.partition("=")
+        if key in _GIT_DIR_OPTS:
+            if eq:
+                target = _join_dir(cwd, inline)
+            elif i + 1 < n:
+                target = _join_dir(cwd, tokens[i + 1])
+                i += 1
+            i += 1
+            continue
+        if key in _GIT_OPTS_WITH_ARG and not eq:
+            i += 2  # consume the option and its separate argument
+            continue
+        i += 1  # bare flag, or --opt=value (self-contained)
+    return target, None
+
+
+def command_git_commit_targets(command: str, cwd: Path) -> list:
+    """Worktree dirs a `git commit` in `command` would land in.
+
+    One Path per `git [global-opts] commit ...` invocation (the effective
+    target dir after -C / --work-tree, defaulting to cwd). `git commit-graph`,
+    `git log --grep=commit`, and `git merge` do NOT match. Never raises."""
+    targets = []
+    try:
+        for seg in _split_segments(command):
+            toks = _tokenize(seg)
+            for i, tok in enumerate(toks):
+                if tok == "git" or tok.endswith("/git"):
+                    target, sub = _scan_git_invocation(toks, i + 1, cwd)
+                    if sub == "commit":
+                        targets.append(target)
+    except Exception:
+        return targets
+    return targets
+
+
+def command_has_git_commit(command: str) -> bool:
+    """True if `command` contains a `git commit` (exact subcommand), robust to
+    global options. Target-agnostic. Never raises."""
+    try:
+        return bool(command_git_commit_targets(command, Path(".")))
+    except Exception:
+        return False

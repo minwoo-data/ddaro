@@ -10,9 +10,10 @@ Thumbs.db
 # Node (in case commands grow helper scripts)
 node_modules/
 
-# Python (in case scripts grow)
+# Python (hook test suite + any helper scripts)
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
 venv/
 

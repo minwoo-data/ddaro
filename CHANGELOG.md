@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-04
+
+### Added
+
+- **Hook test suite (`tests/`).** 82 pytest cases exercise the seven hooks through real subprocess invocation: config-gating (off / warn / strict / no-config), block-allow matrices, the `planning_patterns` allowlist, NotebookEdit `notebook_path` handling, evidence-token freshness/staleness, branch-name validation, worktree-branch match against a throwaway git repo, bypass env vars, and fail-open on malformed stdin. Run with `pytest tests/`; a GitHub Actions workflow to run them on every push/PR (Python 3.9 / 3.11 / 3.13 + a JSON-manifest check) follows separately. The plugin previously shipped protective hooks with no automated coverage; this round alone surfaced three latent bugs - the 0.5.0 SessionStart matcher, the 0.5.1 NotebookEdit field, and the `git -C` bypass below.
+
+### Fixed
+
+- **`main_protection` no longer bypassed by `git -C <main> commit`.** `check-main-bash.py` detected commits with a `git\s+commit` regex, so any git global option between `git` and `commit` (`-C <path>`, `-c k=v`, `--git-dir=`, `--work-tree=`) let a commit land on main under `main_protection=strict`. The same `commit\b` regex also wrongly matched `git commit-graph`. Detection now lives in a shared tokenizer in `_shared.py` (`command_git_commit_targets` / `command_has_git_commit`) that skips global options, matches the `commit` subcommand exactly (so `commit-graph` / `git merge` / `git log --grep=commit` are ignored), and resolves the commit's effective target worktree from `-C` / `--work-tree`. main_protection now reasons about WHERE a commit lands, which also fixes the inverse false-positive (a `git -C <other> commit` launched from main was being blocked). `check-worktree-branch-match.py` shares the same detector. Pre-existing since 0.2.4; still fails open on any error.
+
 ## [0.5.1] - 2026-06-04
 
 ### Fixed

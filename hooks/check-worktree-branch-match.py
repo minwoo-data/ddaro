@@ -32,13 +32,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _shared import (  # noqa: E402
+    command_has_git_commit,
     cwd_from_payload,
     find_ddaro_config,
     read_payload,
 )
-
-
-_GIT_COMMIT_RE = re.compile(r"(?:^|[;&|`\s])git\s+commit\b")
 
 
 def _level(cfg: dict) -> str:
@@ -69,7 +67,7 @@ def _bypass_for_commit(cmd: str) -> bool:
     if env_v not in ("", "0", "false", "False"):
         return True
     for seg in _segments(cmd):
-        if _GIT_COMMIT_RE.search(seg):
+        if command_has_git_commit(seg):
             return bool(_BYPASS_SEGMENT_PREFIX_RE.match(seg))
     return False
 
@@ -164,7 +162,7 @@ def main() -> int:
         return 0
 
     cmd = str((payload.get("tool_input") or {}).get("command") or "")
-    if not cmd or not _GIT_COMMIT_RE.search(cmd):
+    if not cmd or not command_has_git_commit(cmd):
         return 0
 
     if _bypass_for_commit(cmd):
