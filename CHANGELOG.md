@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-04
+
+### Fixed
+
+- **`main_protection` now actually blocks `NotebookEdit` on main.** `hooks/check-main-edit.py` is registered on the `Edit|Write|NotebookEdit` matcher but only read `tool_input.file_path` - which `NotebookEdit` payloads do not carry (they use `notebook_path`). NotebookEdit edits to files inside the main worktree therefore slipped through (empty target -> early return) under `main_protection=strict`, contradicting the hook's stated scope. The hook now falls back to `notebook_path`, so notebook edits on main are guarded like ordinary Edit/Write. Pre-existing since 0.2.4; fails open as before.
+
 ## [0.5.0] - 2026-06-03
 
 Plugin-native hooks release. All seven protective hooks are now registered by the plugin itself via `hooks/hooks.json` at the plugin root, instead of being installed into each project's `.claude/settings.json`. They activate automatically whenever the ddaro plugin is enabled and appear under the `Plugin` source in `/hooks`. Behavior is unchanged: every hook stays config-gated (reads `.ddaro/config.json`) and fail-open, so a project that has not opted in - or has the relevant mode `off` - sees zero noise and zero blocking. This removes the `.claude/settings.json` write that previously polluted projects (and that interfered with clean main-worktree syncs).

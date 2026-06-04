@@ -58,7 +58,11 @@ def main() -> int:
     if not main_path.exists():
         return 0
 
-    target_str = (payload.get("tool_input") or {}).get("file_path") or ""
+    tool_input = payload.get("tool_input") or {}
+    # Edit/Write carry `file_path`; NotebookEdit carries `notebook_path`.
+    # Without the fallback, NotebookEdit edits on main slipped through
+    # (empty target -> early return) despite the matcher covering them.
+    target_str = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
     if not target_str:
         return 0
     target = Path(target_str)
