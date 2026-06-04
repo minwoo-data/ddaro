@@ -8,25 +8,19 @@ invoke this script directly — it reads a PreToolUse JSON payload on stdin.
 
 from __future__ import annotations
 
-import os
-import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _shared import (  # noqa: E402
     bypass_active,
+    command_git_commit_targets,
     cwd_from_payload,
     find_ddaro_config,
     is_inside,
     main_protection_level,
     read_payload,
 )
-
-
-# `git commit`, `git commit --amend`, `git commit --fixup=...`, etc.
-# Intentionally does NOT match `git merge` (main's valid role is to receive merges).
-GIT_COMMIT_RE = re.compile(r"(?:^|[;&|`\s])git\s+commit\b")
 
 
 def main() -> int:
@@ -57,7 +51,12 @@ def main() -> int:
         return 0
 
     cmd = str((payload.get("tool_input") or {}).get("command") or "")
-    if not GIT_COMMIT_RE.search(cmd):
+    # Block only if a `git commit` in the command actually targets main -
+    # the commit's effective worktree (via -C / --work-tree, else cwd).
+    # Robust to global options between `git` and `commit`; ignores
+    # `git commit-graph` / `git merge`.
+    targets = command_git_commit_targets(cmd, cwd)
+    if not any(is_inside(t, main_path) for t in targets):
         return 0
 
     if bypass_active():
