@@ -28,24 +28,24 @@ The first run MUST pin down which folder is `main` before anything else happens.
 3. **Step 6 — main_protection prompt** (new; this is the "main is a receiver, not a workspace" guardrail):
    - Ask: "Install the main-protection hook? This blocks direct `git commit` / `Edit` / `Write` on `<main>` so you can only modify main by merging a ddaro branch. `git merge` and files under `planning_patterns` (`.planning/**`, `.gsd/**`, `CHANGELOG.md`, etc.) still pass. One-shot bypass: `ALLOW_MAIN_DIRECT=1 <cmd>`.  [**strict** (recommended) / warn / off]"
    - Default pick when user hits Enter: **strict**.
-   - If `strict` or `warn`: internally invoke the same flow as `/ddaro:config main_protection <level>` — preview the `.claude/settings.json` hook entries (PreToolUse: Bash → check-main-bash.py, Edit/Write/NotebookEdit → check-main-edit.py) and merge them in. Preserve any existing hooks via sentinel markers. `off` → skip entirely and note "you can enable later with `/ddaro:config main_protection strict`".
+   - Whatever the choice, just write the level into `<main>/.ddaro/config.json`. The hooks (PreToolUse: Bash → check-main-bash.py, Edit/Write/NotebookEdit → check-main-edit.py) are plugin-native, so the mode value alone activates (`warn`/`strict`) or disables (`off`) them - no `.claude/settings.json` edit. `off` → also note "you can enable later with `/ddaro:config main_protection strict`".
    - Write the chosen level into `<main>/.ddaro/config.json`.
 4. **Step 7 — branch_naming prompt** (new; enforces `name_pool` even on non-ddaro branch creations):
    - Ask: "Install the branch-naming hook? This blocks `git checkout -b` / `switch -c` / `branch <name>` / `worktree add -b` from creating branches outside the `name_pool` convention so any branch you create is traceable to a city marker. ddaro-created branches always pass; system branches (main / master / develop / release/* / hotfix/* / ddaro/* / dependabot/*) always pass. One-shot bypass: `ALLOW_NON_DDARO_BRANCH=1 <cmd>`.  [**strict** (recommended) / off]"
    - Default pick when user hits Enter: **strict**.
-   - If `strict`: invoke the same flow as `/ddaro:config branch_naming strict` — preview the `.claude/settings.json` hook entry (PreToolUse Bash → check-branch-naming.py) and merge it. `off` → note "you can enable later with `/ddaro:config branch_naming strict`".
+   - Write the chosen level into config. The hook (PreToolUse Bash → check-branch-naming.py) is plugin-native; no `.claude/settings.json` edit. `off` → note "you can enable later with `/ddaro:config branch_naming strict`".
    - Write the chosen level into `<main>/.ddaro/config.json`.
 5. **Step 8 — cross_worktree_check prompt** (new; SessionStart drift report across all ddaro worktrees):
    - Ask: "Install the cross-worktree health check? At every Claude Code session start, scans every ddaro-managed worktree and reports per-worktree any of: tracked-deleted files / behind origin / uncommit count / stale (per stale_days). Silent when all clean — zero token cost. Catches the foot-gun where you forget you have uncommit work in another physical worktree.  [**on** (recommended) / off]"
    - Default pick when user hits Enter: **on**.
-   - If `on`: invoke `/ddaro:config cross_worktree_check on` — preview the `.claude/settings.json` SessionStart hook entry (cross-worktree-health.py) and merge it. `off` → note "you can enable later with `/ddaro:config cross_worktree_check on`".
+   - Write the chosen value into config. The hook (SessionStart → cross-worktree-health.py) is plugin-native; no `.claude/settings.json` edit. `off` → note "you can enable later with `/ddaro:config cross_worktree_check on`".
    - Write into `<main>/.ddaro/config.json`.
 6. **Step 9 — branch_worktree_match prompt** (new; enforces "commit on the right physical worktree"):
    - Ask: "Install the worktree-branch match hook? Blocks `git commit` when the worktree's city marker (e.g. cwd `*-d-busan`) doesn't match the current branch's city marker (e.g. branch `d-namyangju`). Catches the foot-gun where `git switch` jumped branches but you forgot which physical worktree you were in. One-shot bypass: `ALLOW_WORKTREE_BRANCH_MISMATCH=1 <cmd>`.  [**strict** (recommended) / off]"
    - Default pick when user hits Enter: **strict**.
-   - If `strict`: invoke `/ddaro:config branch_worktree_match strict` — preview the `.claude/settings.json` PreToolUse Bash hook entry (check-worktree-branch-match.py) and merge it. `off` → note "you can enable later with `/ddaro:config branch_worktree_match strict`".
+   - Write the chosen level into config. The hook (PreToolUse Bash → check-worktree-branch-match.py) is plugin-native; no `.claude/settings.json` edit. `off` → note "you can enable later with `/ddaro:config branch_worktree_match strict`".
    - Write into `<main>/.ddaro/config.json`.
-7. If cwd == main (step 1 = yes), print "Setup complete — continuing with worktree creation below" and fall through to Phase B. Otherwise Phase A already stopped above (config + hooks are in place; user will cd to main and re-run start).
+7. If cwd == main (step 1 = yes), print "Setup complete — continuing with worktree creation below" and fall through to Phase B. Otherwise Phase A already stopped above (config is in place; the hooks are plugin-native so nothing else needs installing; user will cd to main and re-run start).
 
 ### Phase B — cwd-is-main precondition (every subsequent run)
 
