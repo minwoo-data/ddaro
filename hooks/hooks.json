@@ -1,0 +1,56 @@
+{
+  "description": "ddaro worktree-safety hooks. Registered plugin-natively (active whenever the ddaro plugin is enabled) so projects no longer need per-project .claude/settings.json entries. Every hook is config-gated: it reads .ddaro/config.json and no-ops (fail-open) when the relevant mode is off or no config is found, so non-ddaro projects see zero noise and zero blocking. Toggle behavior with /ddaro:config (writes .ddaro/config.json, never .claude/settings.json).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-main-edit.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-evidence.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-main-bash.py"
+          },
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-branch-naming.py"
+          },
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-worktree-branch-match.py"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/session-start-notice.py"
+          },
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/cross-worktree-health.py"
+          }
+        ]
+      }
+    ]
+  }
+}
