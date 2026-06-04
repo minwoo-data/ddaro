@@ -116,11 +116,17 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 3. 보호 목록 (다른 작업용 폴더)
 4. 네이밍 전략 (`d-number` / `d-pool` / `ddaro-number` / `ddaro-pool`)
 5. Name pool (`korea_city` / `animal` / `us_state` / `fruit` / `greek`)
-6. **Main protection** (`strict` 기본 / `warn` / `off`) — `.claude/settings.json` 에 PreToolUse 훅을 심어 main 에서 `git commit` / `Edit` / `Write` 를 차단. `git merge` 는 항상 통과 (main 의 본업은 merge 수신). `planning_patterns` (`.planning/**`, `.gsd/**`, `CHANGELOG.md`, `STATE.md`, `ROADMAP.md`, `.claude/**`) 는 통과. 일회성 bypass: `ALLOW_MAIN_DIRECT=1 <cmd>`.
+6. **Main protection** (`strict` 기본 / `warn` / `off`) — main 에서 `git commit` / `Edit` / `Write` 를 차단하는 PreToolUse 훅. `git merge` 는 항상 통과 (main 의 본업은 merge 수신). `planning_patterns` (`.planning/**`, `.gsd/**`, `CHANGELOG.md`, `STATE.md`, `ROADMAP.md`, `.claude/**`) 는 통과. 일회성 bypass: `ALLOW_MAIN_DIRECT=1 <cmd>`.
 
 나중 변경: `/ddaro:config` (인자 없으면 메뉴) 또는 `/ddaro:config <key> <value>` (직접 변경). 가드만 토글: `/ddaro:config main_protection <off|warn|strict>`.
 
 Config 파일 위치: `<main-worktree>/.ddaro/config.json`
+
+### 훅은 플러그인-네이티브 *(0.5.0)*
+
+보호 훅(main protection + branch-naming / cross-worktree health / worktree-branch match / evidence check)은 플러그인 자체의 `hooks/hooks.json` 에 등록됩니다. ddaro 가 켜져 있으면 자동으로 활성화되고 `/hooks` 에서 `Plugin` 소스로 표시됩니다 - **이제 프로젝트의 `.claude/settings.json` 에 훅 블록을 쓰지 않습니다.** 각 훅은 config-gated + fail-open 이라서 `<main>/.ddaro/config.json` 의 모드가 `off` 이거나 config 가 없으면 즉시 no-op - ddaro 안 쓰는 프로젝트엔 노이즈 0. `/ddaro:config <hook> <mode>` 는 모드만 기록하고 `.claude/settings.json` 은 건드리지 않습니다.
+
+**0.4.0 이하에서 업그레이드:** 구버전은 이 훅들을 각 프로젝트의 `.claude/settings.json` 에 설치했습니다. Claude Code 가 정확한 명령 문자열로 훅을 중복 제거하므로 이중 실행은 없지만, 남은 항목은 이제 불필요합니다. `/ddaro:config migrate` 로 한 번에 제거하세요 (idempotent; ddaro 외 훅은 그대로 보존).
 
 ---
 

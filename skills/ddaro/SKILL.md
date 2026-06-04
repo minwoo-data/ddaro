@@ -279,6 +279,26 @@ ddaro only plants this file in worktrees it created. **Absent → not a cleanup 
 
 ---
 
+## Hook registration *(plugin-native, new in 0.5.0)*
+
+All ddaro protective hooks are registered by the plugin itself, in `hooks/hooks.json` at the plugin root. They are active automatically whenever the ddaro plugin is enabled - **projects no longer add anything to `.claude/settings.json`.** In `/hooks` they appear under the `Plugin` source.
+
+This is safe because every hook is **config-gated and fail-open**: each script walks up from cwd looking for `.ddaro/config.json` and returns immediately (exit 0, no output) when the file is absent or the relevant mode is `off`. A project that never ran `/ddaro:start`, or has the mode off, sees zero noise and zero blocking. Python missing / config unparseable -> also a clean exit 0.
+
+What the toggles do now: `/ddaro:config main_protection strict` (and the `branch_naming` / `cross_worktree_check` / `branch_worktree_match` / `evidence_check` toggles) just write the chosen mode into `<main>/.ddaro/config.json`. The hook is already registered; the mode value decides whether it acts. No settings.json preview, no merge, no y/n prompt.
+
+### Upgrading from <= 0.4.0
+
+Versions through 0.4.0 installed these hooks into each project's `.claude/settings.json` (with a y/n preview). Those entries are now redundant. Claude Code de-duplicates hooks by exact command string, so an old entry that matches the plugin's command verbatim collapses to a single run - no double-fire. But the legacy `main_protection` SessionStart entry was written without a `matcher`, which is stale shape worth removing. Clean them out in one shot:
+
+```bash
+/ddaro:config migrate
+```
+
+This scans `.claude/settings.json`, removes only the hook entries whose command references `${CLAUDE_PLUGIN_ROOT}/hooks/<ddaro script>`, leaves every other hook untouched, and is idempotent (a no-op when there is nothing to remove). `/ddaro:config` (no args) and `/ddaro:start` also detect leftover entries and offer to run it.
+
+---
+
 ## Main protection hooks *(opt-in, new in 0.2.4)*
 
 "ddaro never touches main" has historically been a **convention** enforced only by ddaro's own commands. A user (or a parallel Claude Code session) can still run plain `git commit` in the main worktree and break the invariant. `main_protection` promotes the convention to a tool-level guard using Claude Code hooks.
@@ -303,51 +323,13 @@ Shipped inside the plugin at `${CLAUDE_PLUGIN_ROOT}/hooks/`:
 
 All three are Python scripts (stdlib only) for cross-platform portability. If Python is unavailable, the hooks fail open (log to stderr, allow action) - never fail closed.
 
-### Enabling
+### Enabling / disabling
 
 ```bash
-cd <main_worktree>
-/ddaro:config main_protection warn      # or strict
+/ddaro:config main_protection strict     # or warn / off
 ```
 
-ddaro responds with a preview of the `.claude/settings.json` entries it will add and asks y/n:
-
-```
-/ddaro:config main_protection strict will add these entries to
-  .claude/settings.json:
-
-  {
-    "hooks": {
-      "SessionStart": [{
-        "hooks": [{"type": "command",
-                   "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/session-start-notice.py"}]
-      }],
-      "PreToolUse": [
-        {
-          "matcher": "Edit|Write|NotebookEdit",
-          "hooks": [{"type": "command",
-                     "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-main-edit.py"}]
-        },
-        {
-          "matcher": "Bash",
-          "hooks": [{"type": "command",
-                     "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-main-bash.py"}]
-        }
-      ]
-    }
-  }
-
-  Settings file: C:/.../.claude/settings.json
-  Bypass:        ALLOW_MAIN_DIRECT=1 <command>
-
-    y - merge entries into settings.json (preserves existing entries)
-    n - print the JSON for manual paste
-    x - cancel
-
-  [y/n/x]:
-```
-
-Disabling: `/ddaro:config main_protection off` removes the ddaro-owned entries from `.claude/settings.json` (entries are tagged with a sentinel comment so ddaro can find them later). Other users' hook entries stay untouched.
+Writes `main_protection` into `<main>/.ddaro/config.json`. The three scripts above are plugin-native (see "Hook registration" above), so this single write is all that is needed - nothing is added to or removed from `.claude/settings.json`. `off` makes every main-protection hook no-op again. One-shot bypass of a strict block: `ALLOW_MAIN_DIRECT=1 <command>`.
 
 ### Helpful refusal
 
@@ -373,11 +355,11 @@ When a hook blocks an action, it prints the reason plus at least one way forward
 
 ## Evidence-check hook *(opt-in, new in 0.4.0)*
 
-`change-discipline`-style invariants (read the file before editing, grep for the symbol before adding it, scan recent git log for parallel writers) are widely useful but normally enforced via project rules / CLAUDE.md, not at the tool level. `evidence_check` promotes the convention to a PreToolUse hook that fires on Edit/Write/NotebookEdit and surfaces (or refuses) edits without evidence.
+`change-discipline`-style invariants (read the file before editing, grep for the symbol before adding it, scan recent git log for parallel writers) are widely useful but normally enforced via project rules / CLAUDE.md, not at the tool level. `evidence_check` promotes the convention to a PreToolUse hook that fires on Edit/Write and surfaces (or refuses) edits without evidence.
 
 ### Levels
 
-| Level | PreToolUse (Edit/Write/NotebookEdit) | Bypass |
+| Level | PreToolUse (Edit/Write) | Bypass |
 |---|---|---|
 | `off` (default) | allow silently | n/a |
 | `warn` | print reminder to stderr, allow | n/a |
@@ -393,7 +375,7 @@ A grep / Read / `git log` invocation can refresh the token automatically if the 
 
 ### Hook script
 
-`${CLAUDE_PLUGIN_ROOT}/hooks/check-evidence.py` — PreToolUse matching `Edit|Write|NotebookEdit`. Pure stdlib Python. Fails open on any error (parse error, missing config, etc.).
+`${CLAUDE_PLUGIN_ROOT}/hooks/check-evidence.py` — PreToolUse matching `Edit|Write`. Pure stdlib Python. Fails open on any error (parse error, missing config, etc.).
 
 ### Enabling / disabling
 
@@ -402,7 +384,7 @@ A grep / Read / `git log` invocation can refresh the token automatically if the 
 /ddaro:config evidence_check off       # default
 ```
 
-Sample preview / settings.json merge mirrors the `main_protection` pattern: ddaro shows the `.claude/settings.json` entries it will add and asks y/n. Entries are tagged with a sentinel comment so `off` cleanly removes them without disturbing other users' hook entries.
+Plugin-native, like every other ddaro hook (see "Hook registration" above). `/ddaro:config evidence_check <level>` just writes the mode into `.ddaro/config.json`; nothing is added to `.claude/settings.json`.
 
 ### Helpful refusal
 
@@ -1385,10 +1367,11 @@ Direct, script-friendly, one-line.
 | `/ddaro:config language <en\|ko>` | Change language |
 | `/ddaro:config context <true\|false>` | Toggle context MD writes |
 | `/ddaro:config max <N>` | Change max concurrent |
-| `/ddaro:config main_protection <off\|warn\|strict>` | Toggle the hook-based main-worktree guard (installs/uninstalls `.claude/settings.json` entries with y/n confirm) |
-| `/ddaro:config evidence_check <off\|warn\|strict>` | *(new in 0.4.0)* Toggle the Edit/Write evidence-token gate (installs/uninstalls `.claude/settings.json` entries with y/n confirm) |
+| `/ddaro:config main_protection <off\|warn\|strict>` | Set the main-worktree guard mode in `.ddaro/config.json` (the hook itself is plugin-native, 0.5.0) |
+| `/ddaro:config evidence_check <off\|warn\|strict>` | *(new in 0.4.0)* Set the Edit/Write evidence-token gate mode in `.ddaro/config.json` (plugin-native hook, 0.5.0) |
 | `/ddaro:config evidence_token_ttl_seconds <N>` | *(new in 0.4.0)* Lifetime of `.ddaro/evidence-token` for the strict gate (30..86400, default 300) |
 | `/ddaro:config ci_fix_cap <N>` | *(new in 0.4.0)* Per-worktree cap on /ddaro:merge CI fix-loop iterations (1..10, default 3) |
+| `/ddaro:config migrate` | *(new in 0.5.0)* Remove redundant ddaro hook entries from `.claude/settings.json` left by <= 0.4.0 installs (idempotent; other hooks untouched) |
 
 Other removals / fine edits: edit config file manually.
 

@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-03
+
+Plugin-native hooks release. All seven protective hooks are now registered by the plugin itself via `hooks/hooks.json` at the plugin root, instead of being installed into each project's `.claude/settings.json`. They activate automatically whenever the ddaro plugin is enabled and appear under the `Plugin` source in `/hooks`. Behavior is unchanged: every hook stays config-gated (reads `.ddaro/config.json`) and fail-open, so a project that has not opted in - or has the relevant mode `off` - sees zero noise and zero blocking. This removes the `.claude/settings.json` write that previously polluted projects (and that interfered with clean main-worktree syncs).
+
+### Added
+
+- **Plugin-native hook registration (`hooks/hooks.json`).** Registers all seven hooks at the plugin root: PreToolUse `Edit|Write|NotebookEdit` -> `check-main-edit.py`; PreToolUse `Edit|Write` -> `check-evidence.py`; PreToolUse `Bash` -> `check-main-bash.py` + `check-branch-naming.py` + `check-worktree-branch-match.py`; SessionStart -> `session-start-notice.py` + `cross-worktree-health.py`. No `hooks` field in `plugin.json` (auto-discovered from the root `hooks/` directory). Commands use `${CLAUDE_PLUGIN_ROOT}` so paths resolve on every platform.
+- **`/ddaro:config migrate` action.** One-time upgrade helper. Scans `.claude/settings.json` and removes only the hook entries whose command references `${CLAUDE_PLUGIN_ROOT}/hooks/<ddaro script>` (the seven scripts above), dropping now-empty `hooks` arrays / matcher blocks and leaving every other hook untouched. Idempotent (no-op + "already clean" report when there is nothing to remove). `/ddaro:config` (no args) and `/ddaro:start` also detect leftover entries and offer to run it.
+
+### Changed
+
+- **`/ddaro:config <hook> <mode>` no longer edits `.claude/settings.json`.** The `main_protection` / `branch_naming` / `cross_worktree_check` / `branch_worktree_match` / `evidence_check` toggles now only write the chosen mode into `<main>/.ddaro/config.json`. The hook is already registered plugin-natively; the mode value alone decides whether it acts. The old y/n/x settings.json preview / merge / sentinel-removal flow is gone (from `/ddaro:config` and from the `/ddaro:start` Steps 6-9 setup prompts). The mode prompts themselves are unchanged.
+- **SessionStart matcher.** The plugin-native SessionStart entry uses `"matcher": "startup|resume|clear|compact"` to fire on every session-start source, matching the prior no-matcher behavior under the current Claude Code schema (which requires an explicit matcher for plugin hooks).
+
+### Migration
+
+- Upgraders: run `/ddaro:config migrate` once per project to delete the now-redundant ddaro hook entries from `.claude/settings.json`. Not strictly required (Claude Code de-duplicates identical hook commands, so there is no double-fire), but it removes leftover cruft - including the legacy `main_protection` SessionStart entry that was written without a `matcher`.
+- No `.ddaro/config.json` schema change (`schema_version` stays `2`). Existing mode values keep working as-is.
+
 ## [0.4.0] - 2026-05-28
 
 Dev-cycle orchestration release. /ddaro:commit gains an opt-in `--verify` flag that runs the project's verify command(s) before committing, and /ddaro:merge grows a full CI orchestration phase (state machine, hard-capped fix loop, idempotency, confirm gate, sync-main diff preview) so the PR-path can be driven from branch-ready all the way to local-branch-synced. Three pre-existing hooks (branch_naming, cross_worktree_check, branch_worktree_match) that were queued in `[Unreleased]` ship in this release too.

@@ -116,11 +116,17 @@ First `/ddaro:start` triggers a 6-step setup:
 3. Protected worktrees (other folders to leave alone)
 4. Naming strategy (`d-number` / `d-pool` / `ddaro-number` / `ddaro-pool`)
 5. Name pool (`korea_city` / `animal` / `us_state` / `fruit` / `greek`)
-6. **Main protection** (`strict` default / `warn` / `off`) — installs a PreToolUse hook in `.claude/settings.json` that blocks direct `git commit` / `Edit` / `Write` on main. `git merge` stays allowed (main's job is to receive merges). Files in `planning_patterns` (`.planning/**`, `.gsd/**`, `CHANGELOG.md`, `STATE.md`, `ROADMAP.md`, `.claude/**`) also pass through. One-shot bypass: `ALLOW_MAIN_DIRECT=1 <cmd>`.
+6. **Main protection** (`strict` default / `warn` / `off`) — a PreToolUse hook that blocks direct `git commit` / `Edit` / `Write` on main. `git merge` stays allowed (main's job is to receive merges). Files in `planning_patterns` (`.planning/**`, `.gsd/**`, `CHANGELOG.md`, `STATE.md`, `ROADMAP.md`, `.claude/**`) also pass through. One-shot bypass: `ALLOW_MAIN_DIRECT=1 <cmd>`.
 
 Change later via `/ddaro:config` (no args → interactive menu, or `/ddaro:config <key> <value>` for direct set). Toggle the guard specifically: `/ddaro:config main_protection <off|warn|strict>`.
 
 Config file: `<main-worktree>/.ddaro/config.json`.
+
+### Hooks are plugin-native *(0.5.0)*
+
+The protective hooks (main protection + branch-naming, cross-worktree health, worktree-branch match, evidence check) are registered by the plugin itself, in `hooks/hooks.json`. They are active whenever ddaro is enabled and show up under the `Plugin` source in `/hooks` — **projects no longer write hook blocks into `.claude/settings.json`.** Each hook is config-gated and fail-open: it reads `<main>/.ddaro/config.json` and no-ops when the mode is `off` or no config is found, so non-ddaro projects see zero noise. The `/ddaro:config <hook> <mode>` commands just set the mode; they never touch `.claude/settings.json`.
+
+**Upgrading from <= 0.4.0:** older versions installed these hooks into each project's `.claude/settings.json`. Claude Code de-duplicates hooks by exact command string, so there is no double-fire, but the leftover entries are now redundant. Remove them in one shot with `/ddaro:config migrate` (idempotent; leaves all non-ddaro hooks untouched).
 
 ---
 
