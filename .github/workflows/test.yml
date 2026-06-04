@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+      - name: Run hook test suite
+        run: python -m pytest tests/ -q
+      - name: Validate JSON manifests
+        run: >-
+          python -c "import json;
+          [json.load(open(f)) for f in
+          ['hooks/hooks.json', '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json']];
+          print('manifests OK')"
