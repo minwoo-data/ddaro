@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-05
+
+### Added
+
+- **Conductor entry point (`/ddaro:go`).** One command that reads the worktree's lifecycle
+  stage and runs the next step, so you no longer have to remember which of
+  spec/review/check to call. It detects the stage from `.ddaro/lifecycle.json` (or infers
+  it: design doc present? has a `## Review findings` section? are there code changes beyond
+  the doc?), shows the detected stage + its evidence, confirms before the heavy stages
+  (review = 8 agents, check = prism-all), then delegates to the existing `/ddaro:spec` /
+  `/ddaro:review` / `/ddaro:check` section - it adds no review logic of its own. After a
+  stage it advances `.ddaro/lifecycle.json` and points at the next step; at the
+  review -> implement boundary it stops (the human writes the feature, then re-runs
+  `/ddaro:go`). The three named subcommands remain as the manual gears - pass
+  `/ddaro:go spec|review|check` to force/re-run a specific stage. Pure orchestration over
+  the 0.6.0 trio; touches no git history. New conductor state file
+  `<worktree>/.ddaro/lifecycle.json` lives in the git-ignored `.ddaro/` dir.
+
 ## [0.6.0] - 2026-06-05
 
 ### Added

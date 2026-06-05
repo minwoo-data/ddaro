@@ -64,6 +64,7 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 
 ```
 /ddaro:start                  # 새 격리 worktree 생성 (첫 실행 시 설정 프롬프트)
+/ddaro:go                     # 컨덕터: 라이프사이클 다음 단계 자동 실행 (0.6.1 new)
 /ddaro:spec <name>            # 설계문서 스캐폴드 + 결정 캡처 (0.6.0 new)
 /ddaro:review <file>          # prism-all + triad 병렬 리뷰, findings 문서에 합치기 (0.6.0 new)
 /ddaro:commit                 # 안전 검증 + commit + push + context 스냅샷
@@ -74,13 +75,16 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 
 설치/업데이트 후 Claude Code 재시작.
 
-### 라이프사이클 컨덕터 (0.6.0 new)
+### 라이프사이클 컨덕터 (spec/review/check 0.6.0, `/ddaro:go` 0.6.1)
 
-3개 오케스트레이션 서브커맨드가 dev 사이클의 설계->리뷰 앞부분을 채웁니다 (기존 commit->CI-merge 뒷부분 앞):
+오케스트레이션 서브커맨드가 dev 사이클의 설계->리뷰 앞부분을 채웁니다 (기존 commit->CI-merge 뒷부분 앞):
 
 ```
 /ddaro:start -> /ddaro:spec -> /ddaro:review -> [구현] -> /ddaro:check -> /ddaro:commit -> /ddaro:merge
+                \______________ /ddaro:go 가 이 구간을 운전 ______________/
 ```
+
+`/ddaro:go` (0.6.1) 는 자동 운전자입니다. spec/review/check 중 뭘 부를지 외울 필요 없이 `/ddaro:go` 만 치면, worktree 의 라이프사이클 단계를 읽고 다음 단계를 실행하며, 무거운 review/check 단계 전에는 물어봅니다. 3개 이름 있는 서브커맨드는 수동 기어로 남습니다 - `/ddaro:go spec|review|check` 로 특정 단계를 강제할 수 있습니다. `[구현]` 경계에서는 멈춥니다 (사람이 코드를 쓴 뒤 `/ddaro:go` 재실행).
 
 자매 스킬(`doc-template`, `prism`, `triad`)을 순수 지휘만 하며, 없으면 inline으로 폴백합니다. 프로젝트 관리 프레임워크가 아니라, 한 ddaro 세션에 매핑되는 가벼운 "문서 하나 -> 리뷰 -> 구현 -> 리뷰" cadence입니다.
 
@@ -91,6 +95,7 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 | 명령 | 역할 |
 |---|---|
 | `/ddaro:start [name]` | 새 worktree + branch + lock 생성 |
+| `/ddaro:go [spec\|review\|check]` | 컨덕터 (0.6.1): 라이프사이클 다음 단계 자동 실행 (spec -> review -> 구현 -> check), 인자 주면 해당 단계 강제. spec/review/check 에 위임하며 무거운 단계 전엔 확인. |
 | `/ddaro:commit [--verify] [msg]` | 전체 stage, 삭제 검증, 확인, *0.4.0:* `--verify` 플래그 시 프로젝트 verify 명령 실행, commit, push, context MD 기록 |
 | `/ddaro:merge` | 충돌 사전 확인 + 규모별 리뷰 + *0.4.0:* CI 오케스트레이션 (state machine, `gh pr view` 폴링, CI_FAIL 시 hard cap 3회 fix 루프 + `--force-with-lease`, CI_STUCK 별도 처리, idempotency guard, confirm gate, sync-main content-diff preview) |
 | `/ddaro:status` | worktree 안에선 로컬 상태, main 에선 `/ddaro:list` 로 자동 위임 |
