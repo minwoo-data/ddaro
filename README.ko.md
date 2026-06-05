@@ -64,12 +64,25 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 
 ```
 /ddaro:start                  # 새 격리 worktree 생성 (첫 실행 시 설정 프롬프트)
+/ddaro:spec <name>            # 설계문서 스캐폴드 + 결정 캡처 (0.6.0 new)
+/ddaro:review <file>          # prism-all + triad 병렬 리뷰, findings 문서에 합치기 (0.6.0 new)
 /ddaro:commit                 # 안전 검증 + commit + push + context 스냅샷
 /ddaro:commit --verify        # ...추가로 프로젝트의 verify 명령 실행 (0.4.0 new)
+/ddaro:check                  # 머지 전 prism + ship 체크리스트 게이트 (0.6.0 new)
 /ddaro:merge                  # 규모별 리뷰 + CI 오케스트레이션 + merge + sync-main (0.4.0 new)
 ```
 
 설치/업데이트 후 Claude Code 재시작.
+
+### 라이프사이클 컨덕터 (0.6.0 new)
+
+3개 오케스트레이션 서브커맨드가 dev 사이클의 설계->리뷰 앞부분을 채웁니다 (기존 commit->CI-merge 뒷부분 앞):
+
+```
+/ddaro:start -> /ddaro:spec -> /ddaro:review -> [구현] -> /ddaro:check -> /ddaro:commit -> /ddaro:merge
+```
+
+자매 스킬(`doc-template`, `prism`, `triad`)을 순수 지휘만 하며, 없으면 inline으로 폴백합니다. 프로젝트 관리 프레임워크가 아니라, 한 ddaro 세션에 매핑되는 가벼운 "문서 하나 -> 리뷰 -> 구현 -> 리뷰" cadence입니다.
 
 ---
 
