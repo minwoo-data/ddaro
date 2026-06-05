@@ -1443,15 +1443,22 @@ If `language=korean`, all subsequent output is in Korean.
 
 ---
 
-## Lifecycle conductor (spec / review / check) *(new in 0.6.0)*
+## Lifecycle conductor (go / spec / review / check) *(go new in 0.6.1; spec/review/check in 0.6.0)*
 
-Three orchestration subcommands that fill the FRONT half of the dev cycle (design ->
+Orchestration subcommands that fill the FRONT half of the dev cycle (design ->
 review) before ddaro's existing back half (commit -> CI merge):
 
 ```
 /ddaro:start -> /ddaro:spec -> /ddaro:review -> [implement] -> /ddaro:check -> /ddaro:commit -> /ddaro:merge
   (worktree)    (design+decide)  (prism+triad)     (code)         (gate)         (existing ship path)
+                \____________________ /ddaro:go drives this whole row ____________________/
+                       (reads the stage, runs the next step, asks before heavy ones)
 ```
+
+`/ddaro:go` (0.6.1) is the single auto-driver: you don't have to remember which of
+spec/review/check to call - it reads the worktree's lifecycle stage and runs the next step.
+The three named subcommands remain as the manual gears (force/re-run a specific stage).
+Auto-transmission over manual; both are first-class.
 
 They are PURE orchestration: each sequences existing building blocks (the `doc-template`,
 `prism-all`, and `triad` skills) and degrades gracefully to running the steps inline if a
@@ -1459,6 +1466,59 @@ preferred skill is absent. None of them touch git history - only `/ddaro:commit`
 `/ddaro:merge` do. They do NOT reimplement a project-management framework (use GSD for
 that if you want phases/milestones); they encode the lightweight "one doc -> review ->
 implement -> review" cadence that maps to one ddaro session.
+
+## /ddaro:go [stage]
+
+The conductor: read the worktree's lifecycle stage and run the next step automatically, so
+the operator types ONE thing instead of recalling spec vs review vs check.
+
+- **Precondition (reuse `/ddaro status` cwd detection):** must be inside a ddaro worktree
+  (`.git/ddaro-owned` / `.ddaro/OWNED` / LOCK with `adopted=true`). In `config.main_worktree`
+  -> print "you're in main; cd into the worktree first" + the candidate path(s) from
+  `/ddaro:list`. Not under ddaro -> suggest `/ddaro:start <name>` or `/ddaro:adopt <path>`.
+  Never run a stage from main.
+- **Determine the current stage.** Read `<worktree>/.ddaro/lifecycle.json`
+  (`{"stage": "spec|review|implement|check|done", "doc": "<path>", "updated": "<date>"}`) if
+  present. If absent (e.g. an adopted worktree, or a pre-0.6.1 one), INFER it - in order:
+  1. No design doc found (no `docs/design/<topic>.md`, topic from the LOCK file) -> `spec`.
+  2. Doc exists but has no `## Review findings` section -> `review`.
+  3. Doc reviewed but the only changes are to the doc itself (no code diff vs `origin/main`)
+     -> `implement` (human writes code; nothing to run yet).
+  4. Code changes exist vs `origin/main` (commits ahead or working-tree edits beyond the
+     doc) -> `check`.
+  5. A check already PASSED (recorded stage `done`, or a `## Review findings` + a clean
+     prior `/ddaro:check`) -> `done` -> hand off to `/ddaro:commit` + `/ddaro:merge`.
+  Show the operator the detected stage and the evidence ("doc exists, no findings section ->
+  stage=review") so a wrong inference is visible and correctable.
+- **Forced stage:** if `$1` is `spec` / `review` / `check`, run THAT stage's section
+  directly (manual override / re-run), skipping detection. Anything else after auto-detect
+  is unknown-arg.
+- **Confirm before heavy stages.** review fans out 8 agents; check fires prism-all + the
+  ship checklist. Before either, state what it will fire ("review: 8 agents - prism 5 +
+  triad 3; proceed?") and get a yes. `spec` is cheap - proceed, but still ASK its `[DECIDE]`
+  items (never silently default a user-owned choice). Always offer "or jump to
+  spec|review|check" so the operator can override the detected stage in one answer.
+- **Execute by delegating, never duplicating.** Run the matching `## /ddaro:spec` /
+  `## /ddaro:review` / `## /ddaro:check` section verbatim with the resolved arguments (doc
+  path / diff scope). The conductor adds ZERO review logic of its own - it only picks the
+  stage, gates cost, and advances state.
+- **Advance state + point forward.** After the stage finishes, write
+  `<worktree>/.ddaro/lifecycle.json` with the next stage (spec->review, review->implement,
+  check PASS->done, check BLOCK->stays check) and the date from session context
+  (`currentDate`, not a `date` shell call). Then tell the operator the next step and that
+  re-running `/ddaro:go` continues:
+  - after `spec`: "decisions captured -> `/ddaro:go` runs review".
+  - after `review`: STOP at the implement boundary - "findings collated; implement now,
+    then `/ddaro:go` runs check". The conductor cannot write the feature; this gap is the
+    one inherently human stage.
+  - after `check` PASS: "gate passed -> `/ddaro:commit` then `/ddaro:merge`".
+  - after `check` BLOCK: list blockers; stage stays `check`; never auto-proceed.
+- `.ddaro/lifecycle.json` lives in the git-ignored `.ddaro/` dir (same as LOCK / CURRENT.md)
+  - it is local conductor state, never committed. Deleting it just forces re-inference.
+
+Anti-patterns: running a stage from main; firing review/check without the cost confirm;
+re-implementing spec/review/check logic inside `go` instead of delegating; silently
+defaulting a `[DECIDE]`; advancing past a BLOCK.
 
 ## /ddaro:spec <name>
 
@@ -1553,4 +1613,5 @@ What this plugin cannot protect against:
 - `<worktree>/.ddaro/LOCK` - branch/topic/created_at/language JSON
 - `<worktree>/.ddaro/context/*.md` - per-commit snapshots (crash recovery)
 - `<worktree>/.ddaro/CURRENT.md` - running state, overwritten each commit
+- `<worktree>/.ddaro/lifecycle.json` - conductor stage (`/ddaro:go`); `{stage, doc, updated}`, inferred if absent
 - `<main_worktree>/.gitignore` - contains a `.ddaro/` line that keeps the directory out of git (added once by `/ddaro:start`)

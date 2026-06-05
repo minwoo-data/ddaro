@@ -64,6 +64,7 @@ You fire up Session A to fix billing and Session B to refactor auth. Both edit `
 
 ```
 /ddaro:start                  # creates a new isolated worktree (first run prompts for setup)
+/ddaro:go                     # conductor: auto-run the next lifecycle stage (new in 0.6.1)
 /ddaro:spec <name>            # scaffold a design doc + capture decisions (new in 0.6.0)
 /ddaro:review <file>          # prism-all + triad fan-out, findings collated back in (new in 0.6.0)
 /ddaro:commit                 # safe commit + push + context snapshot
@@ -74,14 +75,21 @@ You fire up Session A to fix billing and Session B to refactor auth. Both edit `
 
 Restart Claude Code after install/update.
 
-### Lifecycle conductor (new in 0.6.0)
+### Lifecycle conductor (spec/review/check in 0.6.0, `/ddaro:go` in 0.6.1)
 
-Three orchestration subcommands fill the design->review front half of the dev cycle before
+Orchestration subcommands fill the design->review front half of the dev cycle before
 the existing commit->CI-merge back half:
 
 ```
 /ddaro:start -> /ddaro:spec -> /ddaro:review -> [implement] -> /ddaro:check -> /ddaro:commit -> /ddaro:merge
+                \_______________ /ddaro:go drives this row _______________/
 ```
+
+`/ddaro:go` (0.6.1) is the auto-driver: instead of remembering which of spec/review/check
+to call, run `/ddaro:go` and it reads the worktree's lifecycle stage, runs the next step,
+and asks before the heavy review/check stages. The three named subcommands remain as the
+manual gears - `/ddaro:go spec|review|check` forces a specific stage. It stops at the
+`[implement]` boundary (the human writes the code, then re-runs `/ddaro:go`).
 
 They are pure orchestration over the sibling skills (`doc-template`, `prism`, `triad`) and
 degrade to inline steps if those are absent. Not a project-management framework - just the
@@ -94,6 +102,7 @@ lightweight "one doc -> review -> implement -> review" cadence that maps to one 
 | Command | What it does |
 |---|---|
 | `/ddaro:start [name]` | Create a new worktree + branch + lock |
+| `/ddaro:go [spec\|review\|check]` | Conductor (0.6.1): auto-run the next lifecycle stage (spec -> review -> implement -> check); an arg forces a stage. Delegates to spec/review/check; confirms before heavy stages. |
 | `/ddaro:commit [--verify] [msg]` | Stage all, classify deletions, confirm flagged, optionally run the project's verify command(s) (new in 0.4.0), commit, push, write context MD |
 | `/ddaro:merge` | Pre-flight conflict check + size-based review + CI orchestration (new in 0.4.0): polls `gh pr view --json statusCheckRollup`, handles CI_FAIL via a 3-attempt fix loop with `--force-with-lease`, escalates CI_STUCK ("no checks in 60s") separately, idempotency-guarded squash with confirm gate, then sync-main with content-diff preview. |
 | `/ddaro:status` | In-worktree: local state. In main: auto-delegates to `/ddaro:list`. |
