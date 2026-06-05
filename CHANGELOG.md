@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-05
+
+### Fixed
+
+- **`/ddaro:go` stage inference (fallback path) hardened.** When `.ddaro/lifecycle.json` is
+  absent (adopted or pre-0.6.1 worktrees), `/ddaro:go` infers the stage - and two heuristics
+  were too literal, surfaced by dogfooding on a real worktree:
+  - **Review-findings detection** matched only a literal `## Review findings` heading, so a
+    hand-written doc using a numbered heading (`## 14. Review findings (...)`) read as "not
+    reviewed" and would re-fire the 8-agent review on an already-reviewed doc. Now any h2
+    whose text contains "Review findings" (with or without a section number/date) counts as
+    reviewed.
+  - **Implementation detection** used a two-dot `git diff origin/main` (tip vs tip), so a
+    branch merely *behind* origin/main showed origin's newer files as "changes" and falsely
+    inferred `check` on a stale branch with no real work. Now it uses the merge-base diff
+    `git diff --name-only origin/main...HEAD` (three dots) plus working-tree edits, excluding
+    doc/planning paths (`docs/**`, `*.md`, `.planning/**`, `.ddaro/**`).
+  - The conductor now also flags a LOCK-vs-checked-out branch mismatch or a far-behind branch
+    and prefers asking the operator over guessing. Both heuristics only affect the inference
+    fallback; the normal `/ddaro:go`-driven flow records the stage in `lifecycle.json` and
+    never relies on them, and the cost-confirm gate already prevented a silent re-review.
+
 ## [0.6.1] - 2026-06-05
 
 ### Added

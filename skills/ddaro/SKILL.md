@@ -1481,15 +1481,28 @@ the operator types ONE thing instead of recalling spec vs review vs check.
   (`{"stage": "spec|review|implement|check|done", "doc": "<path>", "updated": "<date>"}`) if
   present. If absent (e.g. an adopted worktree, or a pre-0.6.1 one), INFER it - in order:
   1. No design doc found (no `docs/design/<topic>.md`, topic from the LOCK file) -> `spec`.
-  2. Doc exists but has no `## Review findings` section -> `review`.
-  3. Doc reviewed but the only changes are to the doc itself (no code diff vs `origin/main`)
-     -> `implement` (human writes code; nothing to run yet).
-  4. Code changes exist vs `origin/main` (commits ahead or working-tree edits beyond the
-     doc) -> `check`.
-  5. A check already PASSED (recorded stage `done`, or a `## Review findings` + a clean
+  2. Doc exists but has NO review-findings section -> `review`. Match the heading loosely:
+     any `## ` (h2) line whose text contains "Review findings", with or without a leading
+     section number/date - e.g. `## Review findings (2026-06-05 ...)` AND `## 14. Review
+     findings (...)` both count as reviewed. (A literal `^## Review findings` match misses
+     the numbered form that hand-written docs use; that false "needs review" would re-fire
+     the 8-agent review on an already-reviewed doc.)
+  3. Doc reviewed but the branch added NO implementation beyond docs -> `implement` (human
+     writes code; nothing to run yet).
+  4. The branch added real implementation -> `check`. Compute the branch's OWN changes as the
+     merge-base diff `git diff --name-only origin/main...HEAD` (THREE dots) plus any
+     uncommitted working-tree edits, then EXCLUDE doc/planning paths (`docs/**`, `*.md`,
+     `.planning/**`, `.ddaro/**`). Non-empty after exclusion -> `check`; only the doc left ->
+     stay `implement`. Do NOT use a plain two-dot `git diff origin/main` (tip vs tip): a
+     branch merely BEHIND origin/main shows origin's newer files as "changes" and would
+     falsely infer `check` on a stale branch that has no real work of its own.
+  5. A check already PASSED (recorded stage `done`, or a review-findings section + a clean
      prior `/ddaro:check`) -> `done` -> hand off to `/ddaro:commit` + `/ddaro:merge`.
-  Show the operator the detected stage and the evidence ("doc exists, no findings section ->
-  stage=review") so a wrong inference is visible and correctable.
+  Show the operator the detected stage and the evidence ("doc has '## 14. Review findings' +
+  no non-doc files in origin/main...HEAD -> stage=implement") so a wrong inference is visible
+  and correctable. If the LOCK branch and the checked-out branch disagree, or the branch is
+  far behind origin/main, SAY SO - inference is least reliable there, so prefer asking the
+  operator over guessing the stage.
 - **Forced stage:** if `$1` is `spec` / `review` / `check`, run THAT stage's section
   directly (manual override / re-run), skipping detection. Anything else after auto-detect
   is unknown-arg.
