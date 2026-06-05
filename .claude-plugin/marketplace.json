@@ -10,7 +10,7 @@
       "name": "ddaro",
       "source": "./",
       "description": "Worktree-based parallel workflow for Claude Code sessions. 6-tier worktree classification (main / owned / adopted / protected / unmanaged / external), /ddaro:adopt to bring existing worktrees under management, cwd-safe destructive commands (clear/abandon from main only), size-based merge review, crash-recoverable context logs, and plugin-native protective hooks (0.5.0: registered in hooks/hooks.json, active when ddaro is enabled, modes set via /ddaro:config - never written to .claude/settings.json). New in 0.6.0: a lifecycle conductor (/ddaro:spec design-doc scaffold + decision capture, /ddaro:review prism-all + triad fan-out with collated findings, /ddaro:check pre-merge prism + ship-checklist gate) that orchestrates the doc-template/prism-all/triad skills around the worktree cycle. New in 0.6.1: /ddaro:go - one conductor command that reads the worktree's lifecycle stage and auto-runs the next step (spec/review/check remain as manual gears), confirming before the heavy review/check stages. /ddaro:start uses a 6-step setup. /ddaro:abandon accepts adopted via --force. Korean triggers: 따로, 병렬로, 분리해서.",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "homepage": "https://github.com/minwoo-data/ddaro",
       "license": "MIT",
       "author": {
