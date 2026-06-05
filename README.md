@@ -64,12 +64,28 @@ You fire up Session A to fix billing and Session B to refactor auth. Both edit `
 
 ```
 /ddaro:start                  # creates a new isolated worktree (first run prompts for setup)
+/ddaro:spec <name>            # scaffold a design doc + capture decisions (new in 0.6.0)
+/ddaro:review <file>          # prism-all + triad fan-out, findings collated back in (new in 0.6.0)
 /ddaro:commit                 # safe commit + push + context snapshot
 /ddaro:commit --verify        # ...plus run the project's verify command(s) first (new in 0.4.0)
+/ddaro:check                  # pre-merge prism + ship-checklist gate (new in 0.6.0)
 /ddaro:merge                  # size-based review + CI orchestration + merge + sync-main (new in 0.4.0)
 ```
 
 Restart Claude Code after install/update.
+
+### Lifecycle conductor (new in 0.6.0)
+
+Three orchestration subcommands fill the design->review front half of the dev cycle before
+the existing commit->CI-merge back half:
+
+```
+/ddaro:start -> /ddaro:spec -> /ddaro:review -> [implement] -> /ddaro:check -> /ddaro:commit -> /ddaro:merge
+```
+
+They are pure orchestration over the sibling skills (`doc-template`, `prism`, `triad`) and
+degrade to inline steps if those are absent. Not a project-management framework - just the
+lightweight "one doc -> review -> implement -> review" cadence that maps to one ddaro session.
 
 ---
 

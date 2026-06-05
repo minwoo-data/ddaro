@@ -1443,6 +1443,90 @@ If `language=korean`, all subsequent output is in Korean.
 
 ---
 
+## Lifecycle conductor (spec / review / check) *(new in 0.6.0)*
+
+Three orchestration subcommands that fill the FRONT half of the dev cycle (design ->
+review) before ddaro's existing back half (commit -> CI merge):
+
+```
+/ddaro:start -> /ddaro:spec -> /ddaro:review -> [implement] -> /ddaro:check -> /ddaro:commit -> /ddaro:merge
+  (worktree)    (design+decide)  (prism+triad)     (code)         (gate)         (existing ship path)
+```
+
+They are PURE orchestration: each sequences existing building blocks (the `doc-template`,
+`prism-all`, and `triad` skills) and degrades gracefully to running the steps inline if a
+preferred skill is absent. None of them touch git history - only `/ddaro:commit` and
+`/ddaro:merge` do. They do NOT reimplement a project-management framework (use GSD for
+that if you want phases/milestones); they encode the lightweight "one doc -> review ->
+implement -> review" cadence that maps to one ddaro session.
+
+## /ddaro:spec <name>
+
+Scaffold a design/PRD doc and capture locked decisions BEFORE any code is written.
+
+- Parse `$ARGUMENTS` as `<name> [target-path]`. Target = `$2` or `docs/design/<name>.md`.
+  If it exists, show it and ask before overwriting (offer `--append` for a revision section).
+- **Search-Before-Building (mandatory):** grep `src/services/`, `src/routes/`, and the
+  dirs the project's CLAUDE.md names, for symbols related to `<name>`. Summarize hits into
+  a "Reuse inventory" table (capability | where file:line | reuse/extend/new). A
+  non-greenfield spec with an empty inventory is incomplete - say so.
+- Scaffold the fixed skeleton (use `doc-template` if installed, else inline): TL;DR
+  (decision) / Problem / Evidence / Reuse inventory / Options (verdict per row) / Locked
+  decisions / Slices + per-slice gates / Schema (if any) / UI (if any) / Test plan /
+  Rollback / Open questions (each with a default) / Out of scope.
+- Fill what the conversation settled; mark every unresolved gray area inline as
+  `[DECIDE: <q>]`.
+- **Capture Locked decisions:** for each `[DECIDE]`, record the user's choice or ASK now
+  (AskUserQuestion). Never silently default a decision the user owns.
+- Output: the doc path + the remaining `[DECIDE]` checklist + "next: `/ddaro:review <path>`".
+
+Anti-patterns: empty Reuse inventory; unresolved `[DECIDE]` silently defaulted; empty
+section headers for parts the feature doesn't need (drop them).
+
+## /ddaro:review <file>
+
+Dual-engine multi-angle review of a doc (or diff) + collate findings back in.
+
+- Read the target. With `--diff`, scope to the working/branch diff (see `/ddaro:check`).
+- **Fan out 8 agents in ONE message (parallel):** prism 5 angles (Conflict / Devil's-
+  advocate / Improvement / Code-review accuracy / Robustness 4-axis) + triad 3 lenses
+  (LLM-implementability / Architecture-longevity / Decision-maker comprehension). **Every
+  agent MUST verify the doc's file:line / behavior claims against the ACTUAL code** and
+  flag any that are wrong/stale - this is the step that catches design-breaking errors. If
+  `prism-all` / `triad` skills are installed, invoke them with the same "verify vs code"
+  instruction.
+- Triage: severity CRIT/HIGH/MED/LOW; promote findings raised by 2+ angles/lenses
+  (agreement tier); collect genuine contradictions for the operator.
+- **Collate INTO the target:** append `## Review findings (<date> - prism + triad)` with a
+  table (severity | finding | fix) + a "what changed" note. For a doc, also APPLY the
+  fixes (or, with `--review-only`, just list them). Re-verify any CRIT claim before acting.
+- `--codex`: additionally run the real cross-engine prism-all + triad-all. Default DEFERS
+  Codex to the implementation-PR review for no-code docs and says so in the section.
+- Take the date from session context (`currentDate`), not a `date` shell call.
+- Output: top CRIT/HIGH summary + confirm the section was written. Recommend implement ->
+  `/ddaro:check`.
+
+## /ddaro:check [branch]
+
+Pre-merge review-list gate on the implemented diff. Reports BLOCK/PASS; does not fix.
+
+- Resolve the diff: `$1` branch vs `origin/main`; or `--staged`; else this worktree's
+  `d-<name>` branch vs `origin/main` (read the branch from the lock file).
+- **prism-all on the diff** (correctness, security, regressions, concurrency, data
+  integrity). Adversarially verify each HIGH+ before reporting (spawn skeptics prompted to
+  refute; keep only survivors).
+- **Ship checklist** - discover the project's rules from `.claude/CLAUDE.md` +
+  `.claude/rules/` and check each that applies: tests pass (run the declared command);
+  route-map drift (if routes/app changed -> regenerate + diff); CHANGELOG updated AND its
+  central mirror synced (if declared); schema change additive or flagged; no synthetic
+  accounts / no secrets / no em-dash / config not hardcoded (per rules); docs-vs-code
+  drift on any touched spec.
+- **Verdict:** BLOCK (enumerate every blocker + the single fix each) or PASS.
+- On PASS: recommend / hand off to `/ddaro:commit` then `/ddaro:merge`. On BLOCK: stop;
+  never auto-proceed. It is a gate, not a fixer.
+
+---
+
 ## Limits (honest)
 
 What this plugin protects against:

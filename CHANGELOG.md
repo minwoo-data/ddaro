@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-05
+
+### Added
+
+- **Lifecycle conductor (`/ddaro:spec`, `/ddaro:review`, `/ddaro:check`).** Three
+  orchestration subcommands that fill the design->review FRONT half of the dev cycle
+  before ddaro's existing commit->CI-merge back half:
+  `start -> spec -> review -> [implement] -> check -> commit -> merge`.
+  - `/ddaro:spec <name>` scaffolds a design/PRD doc with a fixed skeleton, enforces
+    Search-Before-Building (greps existing code into a Reuse inventory), and captures
+    Locked decisions (asks rather than silently defaulting a user-owned choice).
+  - `/ddaro:review <file>` fans out 8 agents in parallel (prism 5 angles + triad 3 lenses),
+    requires every agent to verify the doc's code claims against the real source, triages
+    by severity + cross-angle agreement, and collates a `## Review findings` section back
+    into the target. `--codex` adds the cross-engine pass (deferred by default for no-code
+    docs).
+  - `/ddaro:check [branch]` is a pre-merge gate: prism-all on the diff (adversarially
+    verified) + a project ship checklist discovered from CLAUDE.md/rules (tests, route-map
+    drift, CHANGELOG sync, schema-additive, no synthetic accounts/secrets/em-dash) ->
+    BLOCK/PASS, handing off to `/ddaro:commit` + `/ddaro:merge` on PASS.
+  - Pure orchestration: sequences the `doc-template` / `prism-all` / `triad` skills and
+    degrades to inline steps if absent; only commit/merge touch git. Deliberately NOT a
+    GSD-style project/milestone/phase framework - it encodes the lightweight
+    one-doc->review->implement->review cadence that maps to a single ddaro session.
+
 ## [0.5.2] - 2026-06-04
 
 ### Added
