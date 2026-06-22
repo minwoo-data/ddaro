@@ -28,21 +28,83 @@ def read_payload() -> Optional[dict]:
         return None
 
 
+def _load_config_at(dir_path: Path) -> Optional[dict]:
+    """Parse `<dir>/.ddaro/config.json` if present. None on absence/error."""
+    cfg_path = dir_path / ".ddaro" / "config.json"
+    try:
+        if cfg_path.is_file():
+            return json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return None
+
+
+def _main_worktree_root(cwd: Path) -> Optional[Path]:
+    """If `cwd` is a LINKED git worktree, return its main worktree root by
+    following the `.git` file -> gitdir -> commondir pointers. Filesystem-only
+    (no subprocess). Returns None when cwd is the main worktree (its `.git` is
+    a directory, already covered by the parent walk), is not a git repo, or on
+    any error.
+
+    Why this exists: `.ddaro/config.json` is gitignored, so a sibling worktree
+    created by `/ddaro:start` (or adopted) usually has NO config of its own and
+    none up its parent chain -- only the MAIN worktree carries it. Without this
+    resolution every ddaro hook no-ops in such worktrees and the user silently
+    loses all protection (branch_naming, main_protection, ...). Resolving the
+    main config keeps enforcement uniform across every worktree of the repo.
+    A non-ddaro repo costs only a couple of extra file reads here (no subprocess,
+    no behaviour change) and still resolves to None.
+    """
+    git_marker = cwd / ".git"
+    try:
+        # A linked worktree's `.git` is a FILE ("gitdir: <path>"); the main
+        # worktree's `.git` is a directory -> nothing to resolve here.
+        if not git_marker.is_file():
+            return None
+        content = git_marker.read_text(encoding="utf-8").strip()
+        if not content.startswith("gitdir:"):
+            return None
+        gitdir = Path(content[len("gitdir:"):].strip())
+        if not gitdir.is_absolute():
+            gitdir = (cwd / gitdir).resolve()
+        # `<gitdir>/commondir` (git-sanctioned) points at the shared `.git` dir.
+        commondir_file = gitdir / "commondir"
+        if commondir_file.is_file():
+            rel = commondir_file.read_text(encoding="utf-8").strip()
+            common = (gitdir / rel).resolve()  # <main>/.git
+            return common.parent
+        # Fallback for the standard layout:
+        # <gitdir> == <main>/.git/worktrees/<name>.
+        return gitdir.parent.parent.parent
+    except Exception:
+        return None
+
+
 def find_ddaro_config(cwd: Path) -> Optional[dict]:
-    """Walk up from cwd looking for `.ddaro/config.json`. Return parsed
-    dict on success, None otherwise. Never raises."""
+    """Locate the ddaro `.ddaro/config.json` for `cwd`. Walk up from cwd; if
+    nothing is found up the tree, fall back to the MAIN worktree's config when
+    cwd is a linked git worktree (its own `.ddaro/` is typically absent because
+    `.ddaro/` is gitignored). Return parsed dict on success, None otherwise.
+    Never raises."""
     try:
         p = cwd.resolve()
     except Exception:
         return None
 
+    # Fast path: this worktree (or an ancestor) carries the config.
     for candidate in [p, *p.parents]:
-        cfg_path = candidate / ".ddaro" / "config.json"
-        try:
-            if cfg_path.is_file():
-                return json.loads(cfg_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+        cfg = _load_config_at(candidate)
+        if cfg is not None:
+            return cfg
+
+    # Sibling fallback: a linked worktree with no local/ancestor config still
+    # belongs to the ddaro project if its MAIN worktree carries one.
+    main_root = _main_worktree_root(p)
+    if main_root is not None:
+        cfg = _load_config_at(main_root)
+        if cfg is not None:
+            return cfg
+
     return None
 
 

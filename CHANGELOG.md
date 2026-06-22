@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-22
+
+### Fixed
+
+- **Sibling-worktree config discovery.** `find_ddaro_config` (the gate every
+  protective hook calls) walked only the parent chain. Because `.ddaro/` is
+  gitignored, a linked worktree created by `/ddaro:start` (or adopted) usually
+  has no config of its own and none up its parents, so every hook silently
+  no-opped there - the user lost `branch_naming` / `main_protection` /
+  `branch_worktree_match` / `evidence_check` enforcement in all worktrees except
+  the main one, with no warning. The lookup now falls back to the MAIN
+  worktree's config by following the linked worktree's `.git` file ->
+  `gitdir` -> `commondir` chain (filesystem-only, no subprocess; a non-ddaro
+  repo still resolves to None at the cost of a couple of file reads). Protection
+  is now uniform across every worktree of a ddaro repo.
+
+### Added
+
+- **`fetch_before_check` config key (opt-in, default off).** `cross_worktree_check`
+  reads CACHED origin refs, so its "N behind" can be stale. Setting
+  `fetch_before_check` to `on` runs a best-effort `git fetch origin` per worktree
+  before the drift report. Bounded by `fetch_budget_seconds` (default 10) so a
+  down network cannot stack per-worktree timeouts into a long SessionStart stall
+  - which is why it defaults off.
+
 ## [0.6.2] - 2026-06-05
 
 ### Fixed

@@ -7,6 +7,7 @@ matched `git commit-graph`.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -86,3 +87,80 @@ def test_two_commits_two_targets(tmp_path):
 def test_non_commit_yields_no_targets(tmp_path):
     assert _shared.command_git_commit_targets("git commit-graph write", tmp_path) == []
     assert _shared.command_git_commit_targets("git merge x", tmp_path) == []
+
+
+# --- find_ddaro_config: sibling (linked-worktree) fallback ---
+#
+# `.ddaro/config.json` is gitignored, so a linked worktree usually has no
+# config of its own. find_ddaro_config must still resolve the MAIN worktree's
+# config (via the `.git` file -> gitdir -> commondir chain) or every hook
+# silently no-ops there. These guard that resolution.
+
+def _make_linked_worktree(tmp_path, *, with_commondir=True, **cfg_overrides):
+    """Build a minimal main + linked-worktree layout. Returns (main, linked).
+    main carries .ddaro/config.json; linked has a `.git` FILE pointing into
+    main's .git/worktrees/<name>."""
+    main_root = tmp_path / "main"
+    wt_gitdir = main_root / ".git" / "worktrees" / "wt1"
+    wt_gitdir.mkdir(parents=True)
+    if with_commondir:
+        (wt_gitdir / "commondir").write_text("../..\n", encoding="utf-8")
+    cfg = {"schema_version": 2, "main_worktree": main_root.as_posix()}
+    cfg.update(cfg_overrides)
+    (main_root / ".ddaro").mkdir(parents=True)
+    (main_root / ".ddaro" / "config.json").write_text(
+        json.dumps(cfg), encoding="utf-8"
+    )
+    linked = tmp_path / "wt1"
+    linked.mkdir()
+    (linked / ".git").write_text(
+        f"gitdir: {wt_gitdir.as_posix()}\n", encoding="utf-8"
+    )
+    return main_root, linked
+
+
+def test_find_config_sibling_fallback_via_commondir(tmp_path):
+    main_root, linked = _make_linked_worktree(tmp_path, branch_naming="strict")
+    cfg = _shared.find_ddaro_config(linked)
+    assert cfg is not None
+    assert cfg["branch_naming"] == "strict"
+    assert cfg["main_worktree"] == main_root.as_posix()
+
+
+def test_find_config_local_takes_priority_over_sibling(tmp_path):
+    # A linked worktree with its OWN config -> parent walk wins; the sibling
+    # fallback is never consulted.
+    _main_root, linked = _make_linked_worktree(tmp_path, branch_naming="strict")
+    (linked / ".ddaro").mkdir()
+    (linked / ".ddaro" / "config.json").write_text(
+        json.dumps({"schema_version": 2, "branch_naming": "warn"}),
+        encoding="utf-8",
+    )
+    assert _shared.find_ddaro_config(linked)["branch_naming"] == "warn"
+
+
+def test_find_config_fallback_layout_without_commondir(tmp_path):
+    # No commondir file -> positional <gitdir>.parent.parent.parent fallback.
+    main_root, linked = _make_linked_worktree(tmp_path, with_commondir=False)
+    cfg = _shared.find_ddaro_config(linked)
+    assert cfg is not None
+    assert cfg["main_worktree"] == main_root.as_posix()
+
+
+def test_find_config_none_when_main_has_no_config(tmp_path):
+    # Linked worktree whose main carries no .ddaro/config.json -> None, no crash.
+    main_root = tmp_path / "main"
+    wt_gitdir = main_root / ".git" / "worktrees" / "wt1"
+    wt_gitdir.mkdir(parents=True)
+    (wt_gitdir / "commondir").write_text("../..\n", encoding="utf-8")
+    linked = tmp_path / "wt1"
+    linked.mkdir()
+    (linked / ".git").write_text(
+        f"gitdir: {wt_gitdir.as_posix()}\n", encoding="utf-8"
+    )
+    assert _shared.find_ddaro_config(linked) is None
+
+
+def test_find_config_none_for_plain_dir(tmp_path):
+    # Not a worktree, no config anywhere -> None (no subprocess, no crash).
+    assert _shared.find_ddaro_config(tmp_path) is None

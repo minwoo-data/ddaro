@@ -36,6 +36,30 @@ def _enabled(cfg: dict) -> bool:
     return v in ("on", "true", "1", "yes")
 
 
+def _fetch_enabled(cfg: dict) -> bool:
+    """Opt-in `fetch_before_check`. OFF by default: the behind-count below
+    reads CACHED origin refs, so without a prior fetch it can report a stale
+    'N behind'. Turning this on trades a fresh count for one network round-trip
+    per worktree at SessionStart (bounded by a total budget in main())."""
+    v = str(cfg.get("fetch_before_check") or "off").strip().lower()
+    return v in ("on", "true", "1", "yes")
+
+
+def _fetch_origin(wt: Path, timeout: int) -> None:
+    """Best-effort `git fetch origin` so the behind-count is fresh. Swallows
+    every error -- a failed/slow fetch must never block SessionStart."""
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin", "--quiet"],
+            cwd=str(wt),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return
+
+
 def _git(args: list[str], cwd: Path) -> str:
     """Run git in cwd, return stdout (trimmed). Empty string on any error."""
     try:
@@ -145,6 +169,21 @@ def main() -> int:
     except (TypeError, ValueError):
         stale_days = 0
     worktrees = _enumerate_worktrees(cfg, main_path)
+
+    # Opt-in: refresh origin so the behind-count is not stale. Bounded by a
+    # total budget so a down network cannot stack per-worktree timeouts into a
+    # long SessionStart stall (the reason this defaults OFF).
+    if _fetch_enabled(cfg):
+        try:
+            budget = float(cfg.get("fetch_budget_seconds") or 10)
+        except (TypeError, ValueError):
+            budget = 10.0
+        deadline = time.monotonic() + budget
+        for wt in worktrees:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            _fetch_origin(wt, max(1, int(min(remaining, 8))))
 
     lines: list[str] = []
     for wt in worktrees:

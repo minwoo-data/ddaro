@@ -38,6 +38,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` sections "## /ddaro:config [a
 - `cross_worktree_check <on|off>` → toggle SessionStart drift report across all ddaro-managed worktrees. Reads `protected_worktrees` + `git worktree list` and reports per-worktree: tracked-deleted files, behind origin, uncommit count, stale (per `stale_days`). Silent when all clean (zero token cost).
   - Writes the `cross_worktree_check` key in `.ddaro/config.json`.
   - Plugin-native (SessionStart → `${CLAUDE_PLUGIN_ROOT}/hooks/cross-worktree-health.py`): writing `on`/`off` is sufficient; no `.claude/settings.json` edit.
+  - `fetch_before_check <on|off>` (default off) → the behind-count above reads CACHED origin refs and can be stale. Turning this on runs a best-effort `git fetch origin` per worktree first. Bounded by `fetch_budget_seconds` (default 10) so a down network cannot stall SessionStart; defaults off because the fetch costs one network round-trip per worktree.
 - `branch_worktree_match <off|warn|strict>` → toggle the hook-based "commit on right worktree" guard. Blocks `git commit` when the worktree's city marker (e.g. `d-busan` from cwd `*-d-busan`) doesn't match the branch's city marker (e.g. branch `d-namyangju`). Catches the foot-gun where `git switch` jumps branches but the user forgot which physical worktree they were in.
   - Writes the `branch_worktree_match` key in `.ddaro/config.json`.
   - Plugin-native (`PreToolUse` Bash → `${CLAUDE_PLUGIN_ROOT}/hooks/check-worktree-branch-match.py`): writing the mode is sufficient; no `.claude/settings.json` edit.
