@@ -1,6 +1,6 @@
 ---
 name: ddaro:merge
-description: "Merge ddaro or adopted branch to main with pre-flight conflict check, size-based review (triad/prism), pure-deletion scan, CI orchestration (PR path, new in 0.4.0), and cleanup hand-off (prints the cd + /ddaro:clear block; never deletes its own worktree)."
+description: "Merge ddaro or adopted branch to main with pre-flight conflict check, size-based handling with opt-in review (prism for code, triad for changed docs), pure-deletion scan, CI orchestration (PR path, new in 0.4.0), and cleanup hand-off (prints the cd + /ddaro:clear block; never deletes its own worktree)."
 argument-hint: "[--review=auto|skip|triad|prism|mangchi] [--local] [--pr]"
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
 ---
@@ -15,7 +15,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:merge" and
   - small (<50 lines, ≤2 files) → deletion re-confirm only
   - medium (50-300 lines, 3-10 files) → deletion re-confirm + size warning
   - large (>300 lines or >10 files) → deletion re-confirm + size warning + pure-deletion re-scan
-  - `--review=<triad|prism>` (optional, opt-in): if the named plugin is installed on disk, pass the diff to it. If not installed, stop and print install hint. Never auto-invoked from size band alone.
+  - `--review=<prism|triad>` (optional, opt-in): if the named plugin is installed on disk, hand it the merge diff. `prism` -> `/prism --diff main...HEAD` (defect lenses + Evidence pass; the reviewer for code). `triad` -> only the markdown files the diff touches (triad >=0.2.0 refuses code); if the diff has no docs, say so and suggest `--review=prism`. If not installed, stop and print install hint. Never auto-invoked from size band alone.
 - Scan pure deletions across `main..HEAD`.
 - Final `y/n` to user.
 - Merge method: default `gh pr create` (PR path) unless `--local` (switch to main worktree + provide copy-paste merge prompt).

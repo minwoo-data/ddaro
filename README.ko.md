@@ -38,8 +38,8 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 
 ## 자매 도구 (같은 마켓플레이스)
 
-- **[prism](https://github.com/minwoo-data/prism)** - 5-agent 병렬 코드 리뷰 + singleton 검증. 주요 PR 전에 사용.
-- **[triad](https://github.com/minwoo-data/triad)** - 디자인 문서 3관점 숙의 (LLM 명확성 / 아키텍처 / 엔드유저).
+- **[prism](https://github.com/minwoo-data/prism)** - 증거 기반 다각도 리뷰: 코드는 결함 렌즈, 설계 문서는 design 렌즈. 모든 finding을 file/lines에 고정해야 인정. 주요 PR 전에 사용.
+- **[triad](https://github.com/minwoo-data/triad)** - 문서 3관점 숙의: 잘 쓰였는가 (LLM 명확성 / 아키텍처 수명 / 엔드유저).
 - **[mangchi](https://github.com/minwoo-data/mangchi)** - Claude + Codex cross-model 반복 코드 다듬기.
 
 ---
@@ -66,7 +66,7 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 /ddaro:start                  # 새 격리 worktree 생성 (첫 실행 시 설정 프롬프트)
 /ddaro:go                     # 컨덕터: 라이프사이클 다음 단계 자동 실행 (0.6.1 new)
 /ddaro:spec <name>            # 설계문서 스캐폴드 + 결정 캡처 (0.6.0 new)
-/ddaro:review <file>          # prism-all + triad 병렬 리뷰, findings 문서에 합치기 (0.6.0 new)
+/ddaro:review <file>          # 문서: prism design 렌즈 + triad 병렬 / diff: prism --diff, findings 문서에 합치기
 /ddaro:commit                 # 안전 검증 + commit + push + context 스냅샷
 /ddaro:commit --verify        # ...추가로 프로젝트의 verify 명령 실행 (0.4.0 new)
 /ddaro:check                  # 머지 전 prism + ship 체크리스트 게이트 (0.6.0 new)
@@ -114,7 +114,7 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 
 - **물리 격리** - 각 작업은 독립 git worktree + 독립 폴더. 병렬 Claude 세션 간 충돌 원천 차단.
 - **삭제 검증 commit** - diff의 삭제 라인을 분류 (교체 / 포맷 / 순수 삭제 / 함수 제거 / 100줄+) 하여 위험한 것만 확인받음.
-- **규모별 merge 처리** - small / medium / large diff 각각에 단계적으로 더 엄격한 deletion 스캔 적용. cross-plugin 리뷰 (`--review=triad` 또는 `--review=prism`) 는 opt-in 이며 해당 plugin 이 설치돼 있어야 작동. ddaro 는 다른 plugin 을 자동 호출하지 않음.
+- **규모별 merge 처리** - small / medium / large diff 각각에 단계적으로 더 엄격한 deletion 스캔 적용. cross-plugin 리뷰 (`--review=prism` 은 코드, `--review=triad` 는 바뀐 문서) 는 opt-in 이며 해당 plugin 이 설치돼 있어야 작동. ddaro 는 다른 plugin 을 자동 호출하지 않음.
 - **크래시 복구 context** - 매 commit 마다 `.ddaro/context/<sha>.md` 기록 + `CURRENT.md` 갱신. 세션/IDE 크래시 후 `/ddaro:resume` (또는 읽기 전용 `/ddaro:resume --recap-only`) 한 번이면 복원.
 - **3겹 보호**:
   - 1층: `protected_worktrees` config 목록
