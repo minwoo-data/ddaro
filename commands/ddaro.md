@@ -1,15 +1,13 @@
 ---
 name: ddaro
-description: "ddaro - worktree-based parallel workflow + lifecycle conductor. Use subcommands via /ddaro:start, /ddaro:adopt, /ddaro:resume, /ddaro:commit, /ddaro:merge, /ddaro:status, /ddaro:list, /ddaro:clear, /ddaro:abandon, /ddaro:config, the 0.6.0 lifecycle trio /ddaro:spec, /ddaro:review, /ddaro:check, and the 0.6.1 conductor /ddaro:go (auto-runs the next lifecycle stage). Or /ddaro <subcommand> [args]. Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마."
-argument-hint: "<subcommand> [args] - start | adopt | resume | commit | merge | status | list | clear | abandon | config | go | spec | review | check"
-allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
+description: "Worktree-per-session git workflow for parallel Claude sessions. /ddaro <start|commit|merge|resume|status|list|clear|adopt|abandon|config|go|spec|review|check> [args]. Triggers: 따로, 병렬로, 분리해서, main 건드리지 마."
+argument-hint: "<subcommand> [args]"
+allowed-tools: [Agent, Bash, Read, Write, Edit, Glob, Grep]
 ---
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` fully, then:
+# /ddaro
 
-- If `$ARGUMENTS` is empty, show a brief overview of all subcommands and recommend `/ddaro:start` for first-time users (or `/ddaro:adopt <path>` if they already have an existing worktree they want under ddaro).
-- If `$ARGUMENTS[0]` matches one of: `start`, `adopt`, `resume`, `commit`, `merge`, `clear`, `status`, `list`, `abandon`, `config`, `go`, `spec`, `review`, `check` - execute the matching section in the skill document using the remaining arguments.
-- Legacy aliases: `summary` → `/ddaro:resume --recap-only` (with remaining args passed through). `setting` → `/ddaro:config` (no args, opens menu). Print a one-line "note: renamed in v0.3 — use <new-form> directly" then execute.
-- Otherwise, report "unknown subcommand" and list valid ones.
-
-Follow the procedures in SKILL.md exactly. Do not skip config checks, worktree scans, deletion-flag prompts, lock-file creation, or the main-cwd precondition on destructive commands.
+- `$ARGUMENTS` starts with `start`, `adopt`, `resume`, `commit`, `merge`, `clear`, `status`, `list`, `abandon`, `config`, `go`, `spec`, `review`, or `check`: read `${CLAUDE_PLUGIN_ROOT}/commands/ddaro-<subcommand>.md` and follow it exactly with the remaining arguments. Read no other ddaro file unless that file points to one.
+- Legacy aliases: `summary` -> `resume --recap-only`, `setting` -> `config`; print "note: renamed - use /ddaro:<new>" first.
+- Empty: one line per subcommand (start: new worktree / adopt: take over an existing one / commit / merge / resume / status / list / clear: remove merged / abandon: discard / config / go: next lifecycle stage / spec / review / check), and recommend `/ddaro:start` (or `/ddaro:adopt <path>` for an existing worktree).
+- Anything else: "unknown subcommand" + the list.

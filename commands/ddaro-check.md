@@ -1,21 +1,20 @@
 ---
 name: ddaro:check
-description: "Pre-merge review-list gate on the implementation diff: fire prism-all on the changes (bugs/security/regressions) + run the project ship checklist (tests, route-map drift, CHANGELOG sync, schema-additive, project rules), then BLOCK or PASS. On PASS, hand off to /ddaro:commit + /ddaro:merge. Back half of the dev cycle."
-argument-hint: "[branch|--staged] - default: this worktree's branch vs <base>"
-allowed-tools: [Agent, Bash, Read, Glob, Grep]
+description: "Pre-merge gate: prism-all on the diff + project ship checklist -> PASS/BLOCK."
+argument-hint: "[branch|--staged]"
+allowed-tools: [Bash, Read, Glob, Grep, Agent]
+disable-model-invocation: true
 ---
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:check [branch]" and execute with `$ARGUMENTS`.
+# /ddaro:check
 
-- Resolve the diff: `$1` branch vs <base>, or `--staged`, else current `d-<name>` branch vs `origin/<base>`.
-- Fire prism-all on the diff (focus: correctness, security, regressions, concurrency, data integrity). Adversarially verify each HIGH+ before reporting.
-- Run the SHIP CHECKLIST, discovering project rules from `.claude/CLAUDE.md` + `.claude/rules/`:
-  - tests pass (run the project test command);
-  - route-map drift (if `src/routes` or `app.py` touched -> regenerate + diff);
-  - CHANGELOG updated AND its central mirror synced (if the project declares one);
-  - schema change is additive (no data-rewrite that blocks auto-promote) or flagged;
-  - no synthetic test accounts / no secrets / no em-dash / config not hardcoded (per rules);
-  - docs-vs-code drift on any touched spec.
-- Verdict: **BLOCK** (list every blocker + the one fix each) or **PASS**.
-- On PASS, recommend / hand off to `/ddaro:commit` then `/ddaro:merge`. Never auto-merge on BLOCK.
-- Output: the verdict table + blocker list. This is a gate, not a fixer - it reports, the operator (or a follow-up) fixes.
+<!-- step0 -->
+**Step 0.** Find `.ddaro/config.json` in cwd or a parent; in a linked worktree with none, use the main worktree's (`git rev-parse --path-format=absolute --git-common-dir`, then its parent). None found: say "not a ddaro project - run /ddaro:start" and stop (`/ddaro:start` runs first-time setup instead). Then run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd if in main, else `.ddaro/LOCK` `main_worktree`, else `config.main_worktree`) and show its line if it prints one. Terms: "main worktree" = the folder `config.main_worktree` (receives merges only); `<base>` = `config.base_branch` (default `main`), `origin/<base>` its remote-tracking ref; never hardcode a branch name. Reply in `config.language`. If a ddaro script exits non-zero or python is missing, print `[ddaro] <script> <subcommand> failed (exit N): <first stderr line>` and continue; never hand-write `.ddaro/context/*`, `CURRENT.md`, or the config keys `base_branch` / `auto_snapshot` / `schema_version`.
+<!-- /step0 -->
+
+A gate, not a fixer.
+
+1. Diff: `$1` vs `origin/<base>`, or `--staged`, else this worktree's `LOCK.branch` vs `origin/<base>`.
+2. prism-all on the diff (correctness, security, regressions, concurrency, data integrity); verify every HIGH+ adversarially (skeptic agents try to refute; keep survivors).
+3. Ship checklist from `.claude/CLAUDE.md` + `.claude/rules/`, each rule that applies: tests pass (run them), route-map drift if routes changed, CHANGELOG updated (and its mirror if declared), schema change additive or flagged, no synthetic accounts / secrets / hardcoded config / em-dash where the rules ban them, docs-vs-code drift on touched specs.
+4. Verdict BLOCK (every blocker + its one fix) or PASS. PASS -> "/ddaro:commit then /ddaro:merge". Never proceed past a BLOCK.

@@ -10,7 +10,7 @@ Rules (0.8.0 design, D2):
      explicitly below).
   2. anywhere (case-insensitive): origin/main, --merged main, main.., ..main,
      -b d-<x> main, main@, "ahead of main".
-  3. every `## /ddaro:<x>` section in SKILL.md mentions
+  3. every commands/ddaro-<x>.md file mentions
      `config_tool.py ensure-schema`.
 Exceptions: a line ending in `<!-- base-ref-ok -->` (rules 1-2), a heading
 ending in `<!-- ensure-schema-ok -->` (rule 3), and the `## 용어` glossary.
@@ -25,8 +25,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-SKILL = ROOT / "skills" / "ddaro" / "SKILL.md"
-DOCS = [SKILL, *sorted((ROOT / "commands").glob("*.md"))]
+DOCS = [*sorted((ROOT / "commands").glob("*.md")), *sorted((ROOT / "reference").glob("*.md"))]
 
 RULE2 = [re.compile(p, re.IGNORECASE) for p in (
     r"origin/main\b",
@@ -73,26 +72,10 @@ def test_no_hardcoded_base_ref(path):
     assert not bad, "\n".join(f"{path.name}:{n} [{r}] {l}" for n, r, l in bad)
 
 
-def test_every_subcommand_section_runs_ensure_schema():
-    text = SKILL.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    sections = []  # (heading, body)
-    cur_head, cur_body, in_fence = None, [], False
-    for ln in lines:
-        if ln.strip().startswith("```"):
-            in_fence = not in_fence
-        if not in_fence and ln.startswith("## "):
-            if cur_head is not None:
-                sections.append((cur_head, "\n".join(cur_body)))
-            cur_head, cur_body = ln, []
-        else:
-            cur_body.append(ln)
-    if cur_head is not None:
-        sections.append((cur_head, "\n".join(cur_body)))
-    missing = [h for h, body in sections
-               if h.startswith("## /ddaro:") and not h.rstrip().endswith(SCHEMA_OK)
-               and "config_tool.py ensure-schema" not in body]
-    assert not missing, "sections without ensure-schema: " + ", ".join(missing)
+def test_every_subcommand_file_runs_ensure_schema():
+    subs = [p for p in sorted((ROOT / "commands").glob("ddaro-*.md"))]
+    missing = [p.name for p in subs if "config_tool.py ensure-schema" not in p.read_text(encoding="utf-8")]
+    assert not missing, "command files without ensure-schema: " + ", ".join(missing)
 
 
 def test_lint_catches_samples(tmp_path):

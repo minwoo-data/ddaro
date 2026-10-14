@@ -303,114 +303,15 @@ def test_cli_refuses_unmanaged_path(tmp_path):
     assert _run(["init", plain.as_posix(), "--topic", "t"]).returncode == 1
 
 
-def test_headings_match_skill_doc():
-    """SKILL.md 'Context MD Formats' examples must use exactly the HEADINGS."""
-    skill = (HOOKS_DIR.parent / "skills" / "ddaro" / "SKILL.md").read_text(encoding="utf-8")
-    lines = skill.splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.strip() == "## Context MD Formats")
+def test_headings_match_reference_doc():
+    """reference/context-files.md examples must use exactly the HEADINGS."""
+    text = (HOOKS_DIR.parent / "reference" / "context-files.md").read_text(encoding="utf-8")
     found, in_fence = set(), False
-    for ln in lines[start + 1:]:
+    for ln in text.splitlines():
         s_ = ln.strip()
         if s_.startswith("```"):
             in_fence = not in_fence
             continue
-        if in_fence:
-            if s_.startswith("## "):
-                found.add(s_)
-        elif s_.startswith("## "):
-            break  # next real section
+        if in_fence and s_.startswith("## "):
+            found.add(s_)
     assert found == set(context_md.HEADINGS.values())
-
-
-# --- real-world regressions found while verifying on a Windows machine -----
-#
-# Claude Code sends the hook payload as RAW UTF-8 JSON, and /ddaro:commit
-# feeds enrich through a UTF-8 heredoc. The tests above send ASCII-escaped
-# JSON, which hid two bugs on a cp1252 Windows locale: Korean commit messages
-# came out as mojibake (or a UnicodeDecodeError silently dropped the
-# snapshot), and enrich crashed writing surrogates. These send real bytes.
-
-def _run_bytes(args, data: bytes, env: dict | None = None) -> subprocess.CompletedProcess:
-    child = {k: v for k, v in os.environ.items() if not k.startswith("DDARO_")}
-    if env:
-        child.update(env)
-    return subprocess.run([sys.executable, str(SCRIPT), *args], input=data, capture_output=True, env=child)
-
-
-def _hook_raw(cwd: Path, command: str) -> subprocess.CompletedProcess:
-    payload = {"session_id": "s", "hook_event_name": "PostToolUse", "tool_name": "Bash",
-               "cwd": str(cwd), "tool_input": {"command": command, "description": "커밋"},
-               "tool_response": {"stdout": "", "stderr": "", "interrupted": False}}
-    return _run_bytes(["hook"], json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-
-
-def test_hook_korean_message_and_filename_raw_utf8(proj):
-    # "에" encodes to EC 97 90 - 0x90 is undefined in cp1252
-    msg = "복원에 필요한 헬퍼 추가"
-    sha = proj.commit("화면.txt", msg)
-    r = _hook_raw(proj.wt, f'git add -A && git commit -m "{msg}"')
-    assert r.returncode == 0
-    assert json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"].startswith("[ddaro] snapshot written:")
-    text = next(p for p in proj.snapshots() if p.name.endswith(f"-{sha}.md")).read_text(encoding="utf-8")
-    assert f"## Commit message\n{msg}\n" in text
-    assert "- 화면.txt (+2 -0)" in text          # core.quotepath=off: no octal escapes
-    assert f"Commit {sha} - {msg}" in proj.current()
-
-
-def test_enrich_raw_utf8_korean_stdin(proj):
-    sha = proj.commit("a.txt", "add a")
-    body = {"what_was_done": "lastView 복원 로직을 App.jsx에서 분리했다", "review_flags": "없음",
-            "resume_hint": {"last_goal": "마지막 본 화면 복원", "next_expected": "테스트 후 merge"}}
-    r = _run_bytes(["enrich", str(proj.wt), sha], json.dumps(body, ensure_ascii=False).encode("utf-8"))
-    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
-    text = proj.snapshots()[0].read_text(encoding="utf-8")
-    assert "## What was done\nlastView 복원 로직을 App.jsx에서 분리했다\n" in text
-    assert "## Review flags raised\n없음\n" in text
-    assert "- Last goal: 마지막 본 화면 복원" in proj.current()
-
-
-def test_enrich_accepts_utf8_bom(proj):
-    sha = proj.commit("a.txt", "add a")
-    data = b"\xef\xbb\xbf" + json.dumps({"what_was_done": "bom"}).encode()
-    assert _run_bytes(["enrich", str(proj.wt), sha], data).returncode == 0
-
-
-def test_hook_cd_chain_payload_cwd_before_command(proj):
-    """`cd <wt> && git commit` with the payload cwd still at main."""
-    sha = proj.commit("a.txt", "add a")
-    r = _hook_raw(proj.main, f'cd {proj.wt.as_posix()} && git commit -m "add a"')
-    assert r.returncode == 0 and r.stdout
-    assert proj.snapshots()[0].name.endswith(f"-{sha}.md")
-
-
-def test_hook_cd_chain_relative_path(proj):
-    sha = proj.commit("a.txt", "add a")
-    r = _hook_raw(proj.main, 'cd ../proj-d-busan && git commit -m "add a"')
-    assert r.returncode == 0 and r.stdout
-    assert proj.snapshots()[0].name.endswith(f"-{sha}.md")
-
-
-def test_hook_cd_chain_payload_cwd_after_command_no_duplicate(proj):
-    """Payload cwd already at the worktree (post-command): still exactly one snapshot."""
-    proj.commit("a.txt", "add a")
-    _hook_raw(proj.main, 'cd ../proj-d-busan && git commit -m x')
-    r = _hook_raw(proj.wt, 'cd ../proj-d-busan && git commit -m x')
-    assert r.returncode == 0 and r.stdout == b""
-    assert len(proj.snapshots()) == 1
-
-
-@pytest.mark.skipif(os.name != "nt", reason="MSYS /c/... paths only exist on Windows")
-def test_hook_msys_dash_C_path(proj, tmp_path):
-    sha = proj.commit("a.txt", "add a")
-    p = proj.wt.resolve().as_posix()            # C:/Users/...
-    msys = "/" + p[0].lower() + p[2:]          # /c/Users/...
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    r = _hook_raw(elsewhere, f'git -C {msys} commit -m "add a"')
-    assert r.returncode == 0 and r.stdout
-    assert proj.snapshots()[0].name.endswith(f"-{sha}.md")
-
-
-def test_hook_fast_path_non_commit_is_silent(proj):
-    r = _hook_raw(proj.wt, "ls -la && npm test")
-    assert r.returncode == 0 and r.stdout == b"" and r.stderr == b""

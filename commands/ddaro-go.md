@@ -1,17 +1,27 @@
 ---
 name: ddaro:go
-description: "Conductor entry point - read the worktree's lifecycle stage and run the next step (spec -> review -> implement -> check) automatically, instead of remembering which subcommand to call. Detects state, confirms before heavy stages (review/check), executes the matching spec/review/check section, advances the stage, and points at the next step. The manual /ddaro:spec | review | check stay available for forcing a specific stage."
-argument-hint: "[spec|review|check] - no arg = auto-detect + run the next stage; an arg forces that stage"
-allowed-tools: [Agent, Bash, Read, Write, Edit, Glob, Grep]
+description: "Run the next lifecycle stage (spec -> review -> implement -> check)."
+argument-hint: "[spec|review|check]"
+allowed-tools: [Bash, Read, Write, Edit, Glob, Grep, Agent]
+disable-model-invocation: true
 ---
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:go [stage]" and execute with `$ARGUMENTS`.
+# /ddaro:go
 
-- Precondition: must be inside a ddaro worktree (reuse the `/ddaro status` cwd detection). In main -> tell the user which worktree to `cd` into; not under ddaro -> suggest `/ddaro:start` or `/ddaro:adopt`.
-- Determine the current stage from `.ddaro/lifecycle.json` if present, else infer it (design doc exists? has a `## Review findings` section? are there code changes beyond the doc?).
-- If `$1` is `spec` / `review` / `check`, force that stage (manual override / re-run); otherwise run the auto-detected next stage.
-- Before a heavy stage (review = 8 agents, check = prism-all), state what it will fire and confirm. The spec stage's `[DECIDE]` items are still asked interactively.
-- Execute the corresponding `## /ddaro:spec` / `## /ddaro:review` / `## /ddaro:check` section - do NOT reimplement them. The conductor only sequences them.
-- After the stage completes, advance `.ddaro/lifecycle.json` and tell the user the next step (re-run `/ddaro:go`). At the review -> implement boundary, STOP - the human implements, then runs `/ddaro:go` again to reach check.
+<!-- step0 -->
+**Step 0.** Find `.ddaro/config.json` in cwd or a parent; in a linked worktree with none, use the main worktree's (`git rev-parse --path-format=absolute --git-common-dir`, then its parent). None found: say "not a ddaro project - run /ddaro:start" and stop (`/ddaro:start` runs first-time setup instead). Then run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd if in main, else `.ddaro/LOCK` `main_worktree`, else `config.main_worktree`) and show its line if it prints one. Terms: "main worktree" = the folder `config.main_worktree` (receives merges only); `<base>` = `config.base_branch` (default `main`), `origin/<base>` its remote-tracking ref; never hardcode a branch name. Reply in `config.language`. If a ddaro script exits non-zero or python is missing, print `[ddaro] <script> <subcommand> failed (exit N): <first stderr line>` and continue; never hand-write `.ddaro/context/*`, `CURRENT.md`, or the config keys `base_branch` / `auto_snapshot` / `schema_version`.
+<!-- /step0 -->
 
-This is the auto-transmission over the manual spec/review/check gears. It never touches git history; only `/ddaro:commit` / `/ddaro:merge` do.
+Conductor only: it picks the stage, gates cost, and records state; it never touches git history.
+
+1. Must run inside an owned/adopted worktree; in main, list worktrees to `cd` into; elsewhere suggest `/ddaro:start` or `/ddaro:adopt`.
+2. Stage: `$1` in spec/review/check forces it. Else `.ddaro/lifecycle.json` `{"stage", "doc", "updated"}`; absent -> infer and show the evidence:
+   1. no `docs/design/<topic>.md` (topic from LOCK) -> `spec`
+   2. doc without any h2 containing "Review findings" (numbered or dated headings count) -> `review`
+   3. reviewed, and `git diff --name-only origin/<base>...HEAD` (three dots) plus uncommitted edits, minus `docs/**`, `*.md`, `.planning/**`, `.ddaro/**`, is empty -> `implement` (stop: the human writes the code)
+   4. that set is non-empty -> `check`
+   5. stage `done` recorded -> hand off to `/ddaro:commit` + `/ddaro:merge`
+   LOCK/branch mismatch or far behind `origin/<base>`: say so and ask instead of guessing.
+3. Before `review` (8 agents) or `check` (prism-all + checklist) state the cost and get a yes; offer to jump to another stage. `spec` still asks its `[DECIDE]` items.
+4. Run the stage by following `${CLAUDE_PLUGIN_ROOT}/commands/ddaro-<stage>.md` (do not re-implement it).
+5. Write `.ddaro/lifecycle.json` with the next stage (spec->review, review->implement, check PASS->done, check BLOCK->check) and today's date from session context, then say what `/ddaro:go` will do next. Never advance past a BLOCK.

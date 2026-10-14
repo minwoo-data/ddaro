@@ -1,85 +1,37 @@
 ---
 name: ddaro:start
-description: "Create a new isolated ddaro worktree + branch with lock. First run triggers initial config prompt. Scans existing worktrees and surfaces unmanaged ones (with /ddaro:adopt suggestion) and dirty-main state (classified into planning vs code)."
-argument-hint: "[name]"
+description: "Create a new isolated worktree + branch for one session (first run: setup)."
+argument-hint: "[name] [topic]"
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
+disable-model-invocation: true
 ---
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:start [name]" and execute with `$ARGUMENTS` as the optional name.
+# /ddaro:start
 
-### Phase A — First-time setup (no `.ddaro/config.json` anywhere the search finds)
+<!-- step0 -->
+**Step 0.** Find `.ddaro/config.json` in cwd or a parent; in a linked worktree with none, use the main worktree's (`git rev-parse --path-format=absolute --git-common-dir`, then its parent). None found: say "not a ddaro project - run /ddaro:start" and stop (`/ddaro:start` runs first-time setup instead). Then run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd if in main, else `.ddaro/LOCK` `main_worktree`, else `config.main_worktree`) and show its line if it prints one. Terms: "main worktree" = the folder `config.main_worktree` (receives merges only); `<base>` = `config.base_branch` (default `main`), `origin/<base>` its remote-tracking ref; never hardcode a branch name. Reply in `config.language`. If a ddaro script exits non-zero or python is missing, print `[ddaro] <script> <subcommand> failed (exit N): <first stderr line>` and continue; never hand-write `.ddaro/context/*`, `CURRENT.md`, or the config keys `base_branch` / `auto_snapshot` / `schema_version`.
+<!-- /step0 -->
 
-The first run MUST pin down which folder is `main` before anything else happens. cwd is just a guess — confirm it.
+Run from the main worktree. With a config and cwd != `config.main_worktree`, refuse and print `cd <main_worktree>` + `/ddaro:start`. With no config, run "First-time setup" in `${CLAUDE_PLUGIN_ROOT}/reference/config.md` first.
 
-1. Ask: "**Is `<cwd>` your main worktree?** (the canonical receiver folder that ddaro must never touch directly — yes / no / other-path)"
-   - **yes** → treat cwd as main; continue to step 2.
-   - **no** / **other-path** → ask for the intended main path. Validate: must be an existing git worktree (`git worktree list` entry). If path is valid BUT is not cwd:
-     - Save the 5-step config scaffold **pointing at that path** (so the config file lands at `<main>/.ddaro/config.json`, not here).
-     - **Refuse to create a worktree from the current cwd.** Print:
-       ```
-       ✓ Setup saved. Main is set to <main-path>.
-       ✗ /ddaro:start must run from main. Copy-paste:
+1. **Existing worktrees** (classify per `${CLAUDE_PLUGIN_ROOT}/reference/tiers.md` order: main, external, protected, OWNED -> adopted/owned, unmanaged). Owned/adopted: offer `/ddaro:resume <name>` instead (if chosen, stop). Unmanaged: per entry offer `/ddaro:adopt <path>` / finish in place (print cd + `git status`) / ignore (default; never auto-adopt).
+2. **Limits**: refuse at `max_concurrent` owned+adopted; at `warn_threshold` warn and list entries older than `stale_days`.
+3. **Dirty main**: split uncommitted files into planning (`planning_patterns`) and code, show both, offer 1) commit all first (default) 2) commit planning only 3) carry code over (stash, create, stash pop inside) 4) start anyway (they stay on main) 5) cancel. Unpushed commits on main: warn once, do not block.
+4. **Name**: given -> slugify; else per `naming_strategy` (`d-number`: next number never used before; `d-pool`: first unused `name_pools[name_pool]` entry; `ddaro-*`: same with prefix `ddaro-`). Collision -> `-2`, `-3`. Branch `<prefix><name>`, folder `<main_worktree>/../<project>-<prefix><name>` (prefix `d-` or `ddaro-`).
+5. **Topic**: one line from the user (ask if not given).
+6. **Create** (anchored to main, never cwd):
+```bash
+git -C <main_worktree> worktree add <main_worktree>/../<project>-d-<name> -b d-<name> <base>
+```
+7. **Plant**: `mkdir -p <wt>/.ddaro/context`, `touch <wt>/.ddaro/OWNED`, write `<wt>/.ddaro/LOCK` = `{"branch", "topic", "created_at", "main_worktree", "language"}`, append `.ddaro/` to `<main_worktree>/.gitignore` if that line is missing, then `python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py init <wt> --topic "<topic>"`.
+8. **Report**:
+```
+✓ Worktree created: <path>
+✓ Branch:           d-<name>
 
-           cd <main-path>
-           /ddaro:start
-       ```
-     - **Stop here.** Do not scan, do not create worktrees.
-2. Run the 5-step setup (language / main / protected / naming / pool). Persist to `<main>/.ddaro/config.json`. Immediately afterwards run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main>` once and show its output line (this detects and records `base_branch`; the wizard never asks for it). If it looks wrong: `/ddaro:config base_branch <name>`.
-3. **Step 6 — main_protection prompt** (new; this is the "main is a receiver, not a workspace" guardrail):
-   - Ask: "Install the main-protection hook? This blocks direct `git commit` / `Edit` / `Write` on `<main>` so you can only modify main by merging a ddaro branch. `git merge` and files under `planning_patterns` (`.planning/**`, `.gsd/**`, `CHANGELOG.md`, etc.) still pass. One-shot bypass: `ALLOW_MAIN_DIRECT=1 <cmd>`.  [**strict** (recommended) / warn / off]"
-   - Default pick when user hits Enter: **strict**.
-   - Whatever the choice, just write the level into `<main>/.ddaro/config.json`. The hooks (PreToolUse: Bash → check-main-bash.py, Edit/Write/NotebookEdit → check-main-edit.py) are plugin-native, so the mode value alone activates (`warn`/`strict`) or disables (`off`) them - no `.claude/settings.json` edit. `off` → also note "you can enable later with `/ddaro:config main_protection strict`".
-   - Write the chosen level into `<main>/.ddaro/config.json`.
-4. **Step 7 — branch_naming prompt** (new; enforces `name_pool` even on non-ddaro branch creations):
-   - Ask: "Install the branch-naming hook? This blocks `git checkout -b` / `switch -c` / `branch <name>` / `worktree add -b` from creating branches outside the `name_pool` convention so any branch you create is traceable to a city marker. ddaro-created branches always pass; system branches (main / master / develop / release/* / hotfix/* / ddaro/* / dependabot/*) always pass. One-shot bypass: `ALLOW_NON_DDARO_BRANCH=1 <cmd>`.  [**strict** (recommended) / off]"
-   - Default pick when user hits Enter: **strict**.
-   - Write the chosen level into config. The hook (PreToolUse Bash → check-branch-naming.py) is plugin-native; no `.claude/settings.json` edit. `off` → note "you can enable later with `/ddaro:config branch_naming strict`".
-   - Write the chosen level into `<main>/.ddaro/config.json`.
-5. **Step 8 — cross_worktree_check prompt** (new; SessionStart drift report across all ddaro worktrees):
-   - Ask: "Install the cross-worktree health check? At every Claude Code session start, scans every ddaro-managed worktree and reports per-worktree any of: tracked-deleted files / behind origin / uncommit count / stale (per stale_days). Silent when all clean — zero token cost. Catches the foot-gun where you forget you have uncommit work in another physical worktree.  [**on** (recommended) / off]"
-   - Default pick when user hits Enter: **on**.
-   - Write the chosen value into config. The hook (SessionStart → cross-worktree-health.py) is plugin-native; no `.claude/settings.json` edit. `off` → note "you can enable later with `/ddaro:config cross_worktree_check on`".
-   - Write into `<main>/.ddaro/config.json`.
-6. **Step 9 — branch_worktree_match prompt** (new; enforces "commit on the right physical worktree"):
-   - Ask: "Install the worktree-branch match hook? Blocks `git commit` when the worktree's city marker (e.g. cwd `*-d-busan`) doesn't match the current branch's city marker (e.g. branch `d-namyangju`). Catches the foot-gun where `git switch` jumped branches but you forgot which physical worktree you were in. One-shot bypass: `ALLOW_WORKTREE_BRANCH_MISMATCH=1 <cmd>`.  [**strict** (recommended) / off]"
-   - Default pick when user hits Enter: **strict**.
-   - Write the chosen level into config. The hook (PreToolUse Bash → check-worktree-branch-match.py) is plugin-native; no `.claude/settings.json` edit. `off` → note "you can enable later with `/ddaro:config branch_worktree_match strict`".
-   - Write into `<main>/.ddaro/config.json`.
-7. If cwd == main (step 1 = yes), print "Setup complete — continuing with worktree creation below" and fall through to Phase B. Otherwise Phase A already stopped above (config is in place; the hooks are plugin-native so nothing else needs installing; user will cd to main and re-run start).
-
-### Phase B — cwd-is-main precondition (every subsequent run)
-
-- Step 0: once config is resolved, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <config.main_worktree>` and show its line if any (idempotent upgrade path).
-
-- If `.ddaro/config.json` is resolvable but `cwd != config.main_worktree`, refuse:
-  ```
-  ✗ /ddaro:start must run from main (<config.main_worktree>).
-    cd <config.main_worktree>
-    /ddaro:start
-  ```
-  Do not create a worktree from the wrong cwd.
-
-### Phase C — Pre-create scan (cwd == main)
-
-- **Existing-worktree scan** — classify all worktrees via the tier algorithm in SKILL.md. Present in groups:
-  - **Ddaro-owned / adopted active** → offer `/ddaro:resume` instead of creating new; if user picks resume, exit start.
-  - **Unmanaged (not under ddaro)** → surface with three options per entry:
-    1. `/ddaro:adopt <path>` — bring under ddaro management
-    2. commit-and-clean in place (print the cd + `git status` hint; user finishes there first)
-    3. ignore and keep going
-    Default is **ignore** (never auto-adopt).
-- **Main dirty check** — if uncommitted changes exist in cwd, classify files using `config.planning_patterns` (default: `.planning/**`, `.gsd/**`, `STATE.md`, `ROADMAP.md`, `CHANGELOG.md`). Offer targeted options:
-  - commit all before start
-  - commit planning-only, leave code uncommit
-  - carry code changes into the new worktree (git stash → create worktree → stash pop inside)
-  - start anyway (uncommit stays on main, user's problem)
-  - cancel
-- **Unpushed-commits check on main** — if main has unpushed commits, warn once but don't block.
-- Respect `max_concurrent` and `warn_threshold` limits.
-- Use `naming_strategy` + `name_pool` from config when user gives no name.
-
-### Phase D — Create
-
-- `git worktree add <path> -b d-<name> <base>`.
-- Plant `<path>/.ddaro/OWNED`, `<path>/.ddaro/LOCK`, `<path>/.ddaro/context/`, then `python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py init <path> --topic "<topic>"` for the initial `CURRENT.md` (never write it by hand). Append `.ddaro/` to `<main_worktree>/.gitignore` if absent (once per project).
-- Output cd + copy-paste prompt for the new terminal. Remind user: "next steps in the new worktree — edit → `/ddaro:commit` → `/ddaro:merge`. If you close the session, come back with `/ddaro:resume`."
+Next (new terminal):
+  cd <path>
+  claude
+Paste: Continue work on d-<name>. topic: <topic>
+```
+Add: "edit -> /ddaro:commit -> /ddaro:merge; after a crash or days later: /ddaro:resume".
