@@ -10,13 +10,13 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:merge" and
 - Validate lock (current branch == `LOCK.branch`).
 - If uncommitted changes exist, offer: (a) `/ddaro:commit` first (recommended), (b) stash + merge + pop, (c) abort.
 - `git fetch origin`.
-- Dry-run merge with `git merge-tree` base HEAD origin/main. If conflicts, list files and stop.
-- Measure diff size (`main..HEAD`):
+- Dry-run merge with `git merge-tree` base HEAD origin/<base>. If conflicts, list files and stop.
+- Measure diff size (`<base>..HEAD`):
   - small (<50 lines, ≤2 files) → deletion re-confirm only
   - medium (50-300 lines, 3-10 files) → deletion re-confirm + size warning
   - large (>300 lines or >10 files) → deletion re-confirm + size warning + pure-deletion re-scan
-  - `--review=<prism|triad>` (optional, opt-in): if the named plugin is installed on disk, hand it the merge diff. `prism` -> `/prism --diff main...HEAD` (defect lenses + Evidence pass; the reviewer for code). `triad` -> only the markdown files the diff touches (triad >=0.2.0 refuses code); if the diff has no docs, say so and suggest `--review=prism`. If not installed, stop and print install hint. Never auto-invoked from size band alone.
-- Scan pure deletions across `main..HEAD`.
+  - `--review=<prism|triad>` (optional, opt-in): if the named plugin is installed on disk, hand it the merge diff. `prism` -> `/prism --diff <base>...HEAD` (defect lenses + Evidence pass; the reviewer for code). `triad` -> only the markdown files the diff touches (triad >=0.2.0 refuses code); if the diff has no docs, say so and suggest `--review=prism`. If not installed, stop and print install hint. Never auto-invoked from size band alone.
+- Scan pure deletions across `<base>..HEAD`.
 - Final `y/n` to user.
 - Merge method: default `gh pr create` (PR path) unless `--local` (switch to main worktree + provide copy-paste merge prompt).
 - **After merge success, cleanup is handed off - never executed from inside the target worktree**:

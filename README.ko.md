@@ -33,7 +33,8 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 - **병렬 Claude Code 세션** - 세션들이 서로 편집을 덮어쓰는 것을 막는 가장 빠른 방법
 - **위험한 리팩터링** - 임시 worktree에서 매 commit마다 auto-push 되어, 크래시나 잘못된 판단이 작업물을 먹을 수 없음
 - **장기 실험 브랜치** - 각 worktree가 topic + lock 파일을 들고 있어 일주일 뒤에도 "이 브랜치가 뭐였지"가 명확
-- **크래시가 잦은 환경** - 매 commit 후 plain-text context를 디스크에 기록. `/ddaro:resume` 한 번이면 전체 그림 복원.
+- **크래시가 잦은 환경** - 매 commit 후 plain-text context를 디스크에 기록. `/ddaro:resume` 한 번이면 전체 그림 복원. *(0.8.0: `/ddaro:commit`을 안 쳐도 Claude가 Bash로 `git commit`만 하면 훅이 자동으로 스냅샷을 남긴다.)*
+- **main이 아닌 기본 브랜치** *(0.8.0)* - `master`, `develop` 등 머지 대상 브랜치를 한 번 감지해 `config.base_branch`에 저장하고 모든 커맨드가 그 값을 쓴다. 틀리면 `/ddaro:config base_branch <name>`.
 - **끼어드는 작업이 잦은 날 (feature 중 hotfix)** - feature worktree 는 그대로 두고 별도 hotfix worktree 로 수정 → merge → feature 로 `/ddaro:resume` 복귀. context 는 유지.
 
 ## 자매 도구 (같은 마켓플레이스)

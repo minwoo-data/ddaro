@@ -17,7 +17,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:clear [nam
 - **Target resolution**:
   - No name → list merged ddaro-owned + adopted worktrees as candidates; let the user pick.
   - Name given → match against `LOCK.branch` or worktree folder basename.
-- **Merge confirmation**: `git branch --merged main` must include the target's branch. If not, refuse and suggest `/ddaro:merge` first, or `/ddaro:abandon` (owned only) / `git worktree remove --force` (adopted).
+- **Merge confirmation**: `git branch --merged <base>` must include the target's branch. If not, refuse and suggest `/ddaro:merge` first, or `/ddaro:abandon` (owned only) / `git worktree remove --force` (adopted).
 - **Execute, in order**:
   - `git branch -d <branch>` (refuses if unmerged - expected safety).
   - `git push origin --delete <branch>` (prompt y/n if the remote ref still exists; skip silently if it does not).

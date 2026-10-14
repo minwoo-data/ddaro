@@ -17,8 +17,8 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:resume" an
 - **If a `[name]` is given as positional arg**, skip the picker and resume that worktree directly.
 - On user selection of one worktree (or direct-name path):
   1. Build the recap from these sources (this is the former `/ddaro:summary` logic, now inline):
-     - `git log main..HEAD` commit messages
-     - `git diff --stat main..HEAD`
+     - `git log <base>..HEAD` commit messages
+     - `git diff --stat <base>..HEAD`
      - `.ddaro/context/*.md` "What was done" sections
      - `.ddaro/CURRENT.md` Resume hint
      - `git status --porcelain` for uncommit

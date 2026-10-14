@@ -24,7 +24,7 @@ The first run MUST pin down which folder is `main` before anything else happens.
            /ddaro:start
        ```
      - **Stop here.** Do not scan, do not create worktrees.
-2. Run the 5-step setup (language / main / protected / naming / pool). Persist to `<main>/.ddaro/config.json`.
+2. Run the 5-step setup (language / main / protected / naming / pool). Persist to `<main>/.ddaro/config.json`. Immediately afterwards run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main>` once and show its output line (this detects and records `base_branch`; the wizard never asks for it). If it looks wrong: `/ddaro:config base_branch <name>`.
 3. **Step 6 — main_protection prompt** (new; this is the "main is a receiver, not a workspace" guardrail):
    - Ask: "Install the main-protection hook? This blocks direct `git commit` / `Edit` / `Write` on `<main>` so you can only modify main by merging a ddaro branch. `git merge` and files under `planning_patterns` (`.planning/**`, `.gsd/**`, `CHANGELOG.md`, etc.) still pass. One-shot bypass: `ALLOW_MAIN_DIRECT=1 <cmd>`.  [**strict** (recommended) / warn / off]"
    - Default pick when user hits Enter: **strict**.
@@ -48,6 +48,8 @@ The first run MUST pin down which folder is `main` before anything else happens.
 7. If cwd == main (step 1 = yes), print "Setup complete — continuing with worktree creation below" and fall through to Phase B. Otherwise Phase A already stopped above (config is in place; the hooks are plugin-native so nothing else needs installing; user will cd to main and re-run start).
 
 ### Phase B — cwd-is-main precondition (every subsequent run)
+
+- Step 0: once config is resolved, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <config.main_worktree>` and show its line if any (idempotent upgrade path).
 
 - If `.ddaro/config.json` is resolvable but `cwd != config.main_worktree`, refuse:
   ```
@@ -78,6 +80,6 @@ The first run MUST pin down which folder is `main` before anything else happens.
 
 ### Phase D — Create
 
-- `git worktree add <path> -b d-<name> main`.
-- Plant `<path>/.ddaro/OWNED`, `<path>/.ddaro/LOCK`, `<path>/.ddaro/context/`, initial `<path>/.ddaro/CURRENT.md`. Append `.ddaro/` to `<main_worktree>/.gitignore` if absent (once per project).
+- `git worktree add <path> -b d-<name> <base>`.
+- Plant `<path>/.ddaro/OWNED`, `<path>/.ddaro/LOCK`, `<path>/.ddaro/context/`, then `python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py init <path> --topic "<topic>"` for the initial `CURRENT.md` (never write it by hand). Append `.ddaro/` to `<main_worktree>/.gitignore` if absent (once per project).
 - Output cd + copy-paste prompt for the new terminal. Remind user: "next steps in the new worktree — edit → `/ddaro:commit` → `/ddaro:merge`. If you close the session, come back with `/ddaro:resume`."

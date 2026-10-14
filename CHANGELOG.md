@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-13
+
+Two fixes to the things dogfooding showed were not actually working: the merge target was hardcoded as `main`, and the "crash-recoverable context" snapshots only existed when `/ddaro:commit` was used (which in practice it was not).
+
+### Added
+
+- **`config.base_branch` replaces the hardcoded `main`.** `/ddaro:clear` (`--merged`), `/ddaro:merge` (conflict dry-run, size, `gh pr create --base`, post-merge reset), `/ddaro:go` inference, `/ddaro:check` and every ahead count now use `<base>`. Detection lives in one place, `hooks/config_tool.py` (`origin/HEAD` -> local `main` -> local `master` -> `main`), and the value is stored in config so hooks never shell out. A repo on `master` finally works.
+- **Automatic context snapshots on every `git commit`.** New PostToolUse hook `hooks/context_md.py hook` writes `.ddaro/context/<ts>-<sha7>.md` and refreshes `CURRENT.md` after any commit made through Claude Code's Bash tool inside a ddaro-managed worktree (owned or adopted). Idempotent per commit, `--amend` marks the superseded snapshot, 15-minute staleness window (`DDARO_SNAPSHOT_WINDOW_SEC`), one `additionalContext` line so Claude knows the file exists. Gate: `auto_snapshot` (default `on`); `context_persistence: false` still disables everything. Follows `cd <dir> && git commit` (the harness does not reflect an in-command `cd` in the payload `cwd` - verified by capturing a real payload) and Git Bash `/c/...` paths. A non-commit Bash call exits before any heavy import, so the hook costs about a bare interpreter start (Windows: 106ms -> 48ms).
+- **`hooks/context_md.py` is the only writer of context MDs.** `init` (start/adopt), `write` (manual), `enrich` (stdin JSON; `/ddaro:commit` step 8 adds the Claude-written sections) - prompts no longer hand-write these files. Files start with `<!-- ddaro-context v1 -->`; headings are exact constants; the Journey block survives rewrites (including 0.7.0 files without a marker).
+- **`config_tool.py ensure-schema`** - idempotent schema 2 -> 3 migration (fills `base_branch`, `auto_snapshot`), atomic write, run by every subcommand's Step 0. That is the entire upgrade path: update, restart, run any ddaro subcommand once.
+- `/ddaro:config base_branch <name>`, `/ddaro:config auto_snapshot <on|off>`, `/ddaro:config show`.
+- Doc lint `tests/test_no_hardcoded_base_ref.py` so `origin/main`-style literals cannot creep back into SKILL.md / commands, and every subcommand section keeps its ensure-schema call. 60 new tests (`test_config_tool.py`, `test_context_md.py`, shared helpers; 188 total); the context_md fixture uses a real linked worktree, and the Korean / `cd` regressions send raw UTF-8 payloads the way Claude Code does.
+
+### Fixed
+
+- **Non-ASCII stdin and git output on Windows.** Hooks and CLIs read stdin as bytes and decode UTF-8 (`_shared.read_stdin_text`, BOM-tolerant), and decode git output as UTF-8 with `core.quotepath=off`. Before this, a cp1252 locale turned Korean commit messages into mojibake, silently dropped the snapshot for messages containing bytes undefined in cp1252 (e.g. "에"), and crashed `enrich` on Korean summaries. Protective hooks were not affected in practice (surrogateescape kept the ASCII `git commit` tokens intact) but now parse the same bytes explicitly.
+
+### Verified
+
+- Before merge, on a real master-based project (config restored afterwards), a clone of it, and a real headless Claude Code session loading this plugin via `--plugin-dir`: snapshots written for Korean commits, the `additionalContext` line reached the model, `ensure-schema` was idempotent and preserved every existing key. Details in the 0.8.0 pull request.
+
+### Changed
+
+- `branch_naming` also accepts `config.base_branch` as a system branch.
+- `/ddaro:merge --review=prism` (0.7.1) now runs `/prism --diff <base>...HEAD` instead of `main...HEAD`.
+- `## Files changed` in snapshots no longer carries the stat in the heading (it is the first body line) so headings are exact.
+- `/ddaro:summary` and `/ddaro:setting` sections removed from SKILL.md (they had been replaced by `/ddaro:resume --recap-only` and `/ddaro:config` in 0.3.0; the aliases in `/ddaro <sub>` still route).
+- `skills/ddaro/templates/` removed - the format truth is the `HEADINGS` constant in `context_md.py`, and a test keeps the SKILL.md examples in sync.
+- SKILL.md frontmatter version was stale at 0.4.0; now tracks the release.
+
+### Design
+
+- Design doc reviewed by triad (5 rounds, all PASS) before implementation; per the v0.2.5 policy the doc and review record are not shipped in the plugin tree. Summary in the 0.8.0 pull request.
+
 ## [0.7.1] - 2026-10-13
 
 ### Fixed

@@ -123,3 +123,19 @@ def test_fail_open_on_garbage_payload():
         text=True,
     )
     assert r.returncode == ALLOW
+
+
+
+def test_strict_blocks_commit_with_raw_utf8_korean_message(main_wt):
+    """Claude Code sends raw UTF-8; '에' (EC 97 90) is undefined in cp1252.
+    The protective hook must still see `git commit` and block."""
+    import json
+    import subprocess
+    import sys
+    from conftest import HOOKS_DIR
+
+    main_wt.write_config(main_protection="strict")
+    p = main_wt.payload("Bash", command='git commit -m "버그에 대한 수정"')
+    r = subprocess.run([sys.executable, str(HOOKS_DIR / HOOK)],
+                       input=json.dumps(p, ensure_ascii=False).encode("utf-8"), capture_output=True)
+    assert r.returncode == BLOCK

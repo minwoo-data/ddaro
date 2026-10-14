@@ -32,6 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _shared import (  # noqa: E402
+    base_branch,
     cwd_from_payload,
     find_ddaro_config,
     read_payload,
@@ -123,9 +124,10 @@ def _city_pool(cfg: dict) -> set[str]:
     return set(items)
 
 
-def _is_allowed(name: str, cities: set[str]) -> tuple[bool, str]:
-    """Return (allowed, reason)."""
-    if name in _SYSTEM_BRANCHES:
+def _is_allowed(name: str, cities: set[str], base: str = "main") -> tuple[bool, str]:
+    """Return (allowed, reason). `base` is config.base_branch (0.8.0) so a
+    repo whose merge target is e.g. `trunk` can still create/track it."""
+    if name in _SYSTEM_BRANCHES or name == base:
         return True, "system branch"
     if name.startswith(_SYSTEM_PREFIXES):
         return True, "system/auto prefix"
@@ -208,7 +210,7 @@ def main() -> int:
             continue
         if global_env_bypass or _segment_bypass(seg):
             continue
-        ok, reason = _is_allowed(name, cities)
+        ok, reason = _is_allowed(name, cities, base_branch(cfg))
         if ok:
             continue
         print(_refusal(name, reason, cmd, pool_name), file=sys.stderr)

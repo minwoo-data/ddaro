@@ -22,3 +22,7 @@ venv/
 
 # Claude Code local state
 .claude/settings.local.json
+
+# Internal design artifacts (v0.2.5 policy: never ship them in the plugin tree)
+docs/design/
+docs/discussion/
