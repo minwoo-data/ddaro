@@ -38,8 +38,8 @@ You fire up Session A to fix billing and Session B to refactor auth. Both edit `
 
 ## Sibling tools (same marketplace)
 
-- **[prism](https://github.com/minwoo-data/prism)** - 5-agent parallel code review with singleton verification. Use before major PRs.
-- **[triad](https://github.com/minwoo-data/triad)** - 3-perspective deliberation on design docs (LLM clarity / architecture / end-user).
+- **[prism](https://github.com/minwoo-data/prism)** - evidence-graded multi-angle review: defect lenses for code, design lenses for design docs; every finding is pinned to file/lines before it counts. Use before major PRs.
+- **[triad](https://github.com/minwoo-data/triad)** - 3-perspective deliberation on documents: is it well written (LLM clarity / architecture longevity / end-user).
 - **[mangchi](https://github.com/minwoo-data/mangchi)** - Claude + Codex cross-model iterative code refinement.
 
 ---
@@ -66,7 +66,7 @@ You fire up Session A to fix billing and Session B to refactor auth. Both edit `
 /ddaro:start                  # creates a new isolated worktree (first run prompts for setup)
 /ddaro:go                     # conductor: auto-run the next lifecycle stage (new in 0.6.1)
 /ddaro:spec <name>            # scaffold a design doc + capture decisions (new in 0.6.0)
-/ddaro:review <file>          # prism-all + triad fan-out, findings collated back in (new in 0.6.0)
+/ddaro:review <file>          # doc: prism design lenses + triad / diff: prism --diff; findings collated back in
 /ddaro:commit                 # safe commit + push + context snapshot
 /ddaro:commit --verify        # ...plus run the project's verify command(s) first (new in 0.4.0)
 /ddaro:check                  # pre-merge prism + ship-checklist gate (new in 0.6.0)
@@ -121,7 +121,7 @@ Also callable as `/ddaro <subcommand>`.
 
 - **Physical isolation** - each task gets its own git worktree in its own folder. Parallel Claude sessions cannot collide.
 - **Deletion-aware commits** - classifies diff deletions (replace / format / pure / function-level / >100 lines) and prompts only when destructive.
-- **Size-based merge handling** - small / medium / large diffs each get progressively stricter deletion scans. Cross-plugin review (`--review=triad` or `--review=prism`) is opt-in only and requires the named plugin to be installed. ddaro never calls another plugin automatically.
+- **Size-based merge handling** - small / medium / large diffs each get progressively stricter deletion scans. Cross-plugin review (`--review=prism` for code, `--review=triad` for changed docs) is opt-in only and requires the named plugin to be installed. ddaro never calls another plugin automatically.
 - **Crash-recoverable context** - every commit writes `.ddaro/context/<sha>.md` and refreshes `CURRENT.md`. After a session or IDE crash, `/ddaro:resume` (or `/ddaro:resume --recap-only` for read-only) rebuilds the full picture.
 - **3-layer protection** against accidental destruction:
   - Layer 1: `protected_worktrees` config list

@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-13
+
+### Fixed
+- **`/ddaro:review` routing after the prism 0.3 / triad 0.2 split.** triad 0.2.0 became
+  documents-only and prism 0.3.0 briefly refused documents, so the 8-agent gate could fail on
+  both sides. Routing is now by target: a **design doc** gets prism's 5 design angles (conflict &
+  reuse / claim accuracy / devil's advocate / robustness 4-axis / improvement - "is it sound?")
+  plus triad's 3 lenses ("is it well written?"); a **`--diff`** gets prism's defect lenses with
+  its Evidence pass (`/prism --diff` scoping) plus triad only on the markdown files the diff
+  touches. Needs prism >=0.3.1 to invoke the skill on docs; with prism 0.3.0 the design angles run
+  inline.
+- **`/ddaro:merge --review=<prism|triad>`**: `prism` runs `/prism --diff main...HEAD`; `triad` is
+  limited to changed markdown files and suggests `--review=prism` for code-only diffs. Size-band
+  hints say "consider --review=prism" instead of "triad review".
+- READMEs: prism/triad one-liners no longer describe prism 0.1 ("singleton verification").
+
 ## [0.7.0] - 2026-06-22
 
 ### Fixed

@@ -843,7 +843,7 @@ Stuck-state detection:
    - small → deletion re-confirm only
    - medium → deletion re-confirm + size warning printed to user
    - large → deletion re-confirm + size warning + pure-deletion re-scan across the full diff
-   - `--review=<triad|prism>` (optional, opt-in only): if the named plugin is detected on disk (stat-check `${HOME}/.claude/plugins/cache/haroom_plugins/<name>/` or `${HOME}/.claude/skills/<name>/`), pass the diff to it. If the plugin is not installed, stop and print the install hint (`/plugin marketplace add https://github.com/minwoo-data/haroom_plugins.git` then `/plugin install <name>`). Never auto-invoked from the size band alone.
+   - `--review=<prism|triad>` (optional, opt-in only): if the named plugin is detected on disk (stat-check `${HOME}/.claude/plugins/cache/haroom_plugins/<name>/` or `${HOME}/.claude/skills/<name>/`), hand it the merge diff: `prism` -> `/prism --diff main...HEAD` (defect lenses + Evidence pass - the reviewer for code); `triad` -> only the markdown files the diff touches (triad >=0.2.0 refuses code; if the diff has no docs, say so and suggest `--review=prism`). If the plugin is not installed, stop and print the install hint (`/plugin marketplace add https://github.com/minwoo-data/haroom_plugins.git` then `/plugin install <name>`). Never auto-invoked from the size band alone.
 7. **Pure-deletion re-scan**: whole-diff check - anything that existed on main but disappears in the merge gets flagged.
 8. **Final y/n** from user.
 9. **Merge method**:
@@ -1181,7 +1181,7 @@ Progress:
 
 ━ Next recommended ━
   • Finish uncommit → /ddaro:commit
-  • Then /ddaro:merge (size: medium → triad review)
+  • Then /ddaro:merge (size: medium → consider --review=prism)
 ```
 
 ### Crash recovery usage
@@ -1226,7 +1226,7 @@ Re-enter a ddaro worktree after a session ends, a crash, or a days-later return.
 
    ━ Next recommended ━
      • /ddaro:commit  (stage uncommit first)
-     • /ddaro:merge   (size: medium → triad review)
+     • /ddaro:merge   (size: medium → consider --review=prism)
 
    ━━━ Copy-paste to resume ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1561,19 +1561,27 @@ section headers for parts the feature doesn't need (drop them).
 Dual-engine multi-angle review of a doc (or diff) + collate findings back in.
 
 - Read the target. With `--diff`, scope to the working/branch diff (see `/ddaro:check`).
-- **Fan out 8 agents in ONE message (parallel):** prism 5 angles (Conflict / Devil's-
-  advocate / Improvement / Code-review accuracy / Robustness 4-axis) + triad 3 lenses
-  (LLM-implementability / Architecture-longevity / Decision-maker comprehension). **Every
+- **Doc target - fan out 8 agents in ONE message (parallel):** prism's 5 design angles
+  (Conflict & reuse / Claim accuracy / Devil's-advocate / Robustness 4-axis / Improvement)
+  answer "is the design sound?"; triad's 3 lenses (LLM-implementability / Architecture-
+  longevity / Decision-maker comprehension) answer "is the doc well written?". **Every
   agent MUST verify the doc's file:line / behavior claims against the ACTUAL code** and
-  flag any that are wrong/stale - this is the step that catches design-breaking errors. If
-  `prism-all` / `triad` skills are installed, invoke them with the same "verify vs code"
-  instruction.
+  flag any that are wrong/stale - this is the step that catches design-breaking errors.
+- **`--diff` target:** prism's 5 defect lenses on the diff (same scoping as `/prism --diff`:
+  hunks + pre-change code + direct callers/callees + touched tests) with its Evidence pass,
+  plus triad's 3 lenses on each markdown file the diff touches. triad >=0.2.0 refuses code,
+  so never hand it source files; a code-only diff gets prism alone (say so in the section).
+- **Invoking the skills (when installed):** `/prism <doc>` (prism >=0.3.1 auto-selects its
+  design lens set for markdown) or `/prism --diff`, and `/triad <doc>`, each with the same
+  "verify vs code" instruction. If `/prism` answers a doc with a refusal (prism 0.3.0 only),
+  run the 5 design angles inline and note the version in the findings section.
 - Triage: severity CRIT/HIGH/MED/LOW; promote findings raised by 2+ angles/lenses
   (agreement tier); collect genuine contradictions for the operator.
 - **Collate INTO the target:** append `## Review findings (<date> - prism + triad)` with a
   table (severity | finding | fix) + a "what changed" note. For a doc, also APPLY the
   fixes (or, with `--review-only`, just list them). Re-verify any CRIT claim before acting.
-- `--codex`: additionally run the real cross-engine prism-all + triad-all. Default DEFERS
+- `--codex`: additionally run the real cross-engine versions (doc -> prism-all + triad-all;
+  diff -> prism-all on the diff context + triad-all on changed docs). Default DEFERS
   Codex to the implementation-PR review for no-code docs and says so in the section.
 - Take the date from session context (`currentDate`), not a `date` shell call.
 - Output: top CRIT/HIGH summary + confirm the section was written. Recommend implement ->
