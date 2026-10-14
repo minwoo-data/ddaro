@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-13
+
+Token diet. ddaro was the most expensive plugin in the family: every session paid for 15 long command descriptions, and every command told the model to read the 92k-character `skills/ddaro/SKILL.md` (about 25-30k tokens) that then stayed in context for the rest of the session.
+
+### Changed
+
+- **One instruction file per command.** Each `commands/ddaro-<sub>.md` now holds that command's full procedure (identical Step 0 in every file, enforced by a test). Material several commands share lives in small on-demand files under `reference/` (`tiers.md`, `config.md` incl. first-time setup, `hooks.md`, `context-files.md`), read only when a command needs it.
+- **`skills/ddaro/` removed** (SKILL.md and the stale `references/usage.md`). The skill was shadowed by the `/ddaro` command of the same name, so it added nothing to the listing; its only cost was being read in full by every command.
+- **Subcommands are user-invoked only** (`disable-model-invocation: true`). You still type `/ddaro:commit` etc.; the model sees a single `/ddaro <sub>` entry and routes through it.
+- Command descriptions shortened to one line; manifest descriptions condensed.
+
+### Measured (headless Claude Code, same sandbox, before -> after)
+
+- Always-on cost per session: 2,015 -> 112 tokens.
+- `/ddaro:list`: peak context 57,883 -> 29,816; tokens processed 248,459 -> 86,126; cost -64%.
+- Context a command adds when invoked: up to ~29k (SKILL.md) -> 1.1-1.5k (its own file).
+
 ## [0.8.0] - 2026-10-13
 
 Two fixes to the things dogfooding showed were not actually working: the merge target was hardcoded as `main`, and the "crash-recoverable context" snapshots only existed when `/ddaro:commit` was used (which in practice it was not).

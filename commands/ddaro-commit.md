@@ -1,20 +1,33 @@
 ---
 name: ddaro:commit
-description: "Safe commit - stage all, classify deletions, confirm flagged ones, optionally run verify (--verify), commit, push, write context snapshot MD. Repeatable per edit session."
-argument-hint: "[--verify] [commit-message]"
+description: "Safe commit: deletion check, optional --verify, commit, push, snapshot."
+argument-hint: "[--verify] [message]"
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
+disable-model-invocation: true
 ---
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:commit [message]" and execute with `$ARGUMENTS` as the optional flags + commit message.
+# /ddaro:commit
 
-- Refuse if cwd is the main worktree (tell user to `/ddaro:start` first).
-- Step 0: resolve config and run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` (show its line if any).
-- Validate lock: current branch must match `.ddaro/LOCK` branch field.
-- `git add -A`, then analyze `git diff --cached` for deletion patterns.
-- Classify deletions: OK (replace/format) vs FLAG (pure) vs ALWAYS CONFIRM (function/class/export/export/100+ lines).
-- If FLAG or ALWAYS CONFIRM present, show them and wait for `y/n/abort`.
-- **If `--verify` flag set**: discover the project's verify command (primary: `.ddaro/verify.json`; fallback: `.claude/CLAUDE.md` "Commands" section). Run the verify command(s) matched to the touched files' types. On non-zero exit, prompt user before continuing - never silently commit broken code.
-- If no message given, auto-generate: `ddaro: d-<name> - N files (+X -Y)`.
-- Commit, then `git push origin d-<name>`.
-- Context enrich (never write the MDs by hand): the PostToolUse hook already snapshotted the commit; run `python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py enrich <worktree> <sha7>` with a JSON body on stdin (`what_was_done`, `next_planned`, `review_flags`, `currently`, `resume_hint{last_goal,next_expected}`) exactly as SKILL.md step 8 shows. stdout `created+enriched` just means the hook had not run; non-zero exit = print the one-line failure and continue.
-- Report commit SHA, change size, push status, ahead-of-main count, context path.
+<!-- step0 -->
+**Step 0.** Find `.ddaro/config.json` in cwd or a parent; in a linked worktree with none, use the main worktree's (`git rev-parse --path-format=absolute --git-common-dir`, then its parent). None found: say "not a ddaro project - run /ddaro:start" and stop (`/ddaro:start` runs first-time setup instead). Then run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd if in main, else `.ddaro/LOCK` `main_worktree`, else `config.main_worktree`) and show its line if it prints one. Terms: "main worktree" = the folder `config.main_worktree` (receives merges only); `<base>` = `config.base_branch` (default `main`), `origin/<base>` its remote-tracking ref; never hardcode a branch name. Reply in `config.language`. If a ddaro script exits non-zero or python is missing, print `[ddaro] <script> <subcommand> failed (exit N): <first stderr line>` and continue; never hand-write `.ddaro/context/*`, `CURRENT.md`, or the config keys `base_branch` / `auto_snapshot` / `schema_version`.
+<!-- /step0 -->
+
+Run inside an owned/adopted worktree; in the main worktree stop and suggest `/ddaro:start`. **Lock check**: if the checked-out branch differs from `.ddaro/LOCK` `branch`, show both and ask y/n (default abort).
+
+1. `git add -A` (`.ddaro/` is git-ignored).
+2. **Deletions** in `git diff --cached`: replacement (same symbol re-added nearby) or whitespace-only -> OK silently; pure deletion with no replacement -> FLAG; removed function/class/export, or >100 pure-deletion lines -> ALWAYS CONFIRM. If any FLAG/CONFIRM, show `Diff summary: +X -Y (N files)` and one line per item (`[confirm] <file>:<line> <what> - no replacement, intentional?`), then wait for y / n / abort.
+3. **`--verify` only**: commands from `.ddaro/verify.json` (`{"commands": [{"pattern": "**/*.py", "run": "pytest -x -q"}], "default": "..."}`; first matching pattern per staged file, each command run once), else the fenced commands under `## Commands` in `.claude/CLAUDE.md` (pytest for .py, smoke/npm test for js/html), else warn "no verify config found" and continue. On a non-zero exit show the last 20 lines and ask: `k` keep staged and stop (default) / `d` unstage and `git restore` the touched files / `c` commit anyway (record "verify bypassed (c)" in review_flags).
+4. `git commit -m "<message>"`; no message -> `ddaro: <branch> - N files (+X -Y)` (ASCII). If a pre-commit hook rejects, ask for a fix or message; never `--no-verify`.
+5. `git push origin <branch>` (set upstream on first push).
+6. **Enrich** the snapshot the hook just wrote (`<sha7>` from `git rev-parse --short=7 HEAD`):
+```bash
+python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py enrich <worktree> <sha7> <<'JSON'
+{"what_was_done": "<one-line intent>", "next_planned": "<TODOs / next step>",
+ "review_flags": "<step 2 flags, verify bypass, or None>", "currently": "Idle (just committed)",
+ "resume_hint": {"last_goal": "<topic + intent>", "next_expected": "<next step>"}}
+JSON
+```
+stdout `created+enriched <sha7>` just means the hook had not run.
+7. Report: commit sha7, `N files (+X -Y)`, push state, commits ahead of `<base>`, snapshot file.
+
+Between edits: re-check `git log --oneline -3 -- <file>` before editing a file you read earlier (another writer may have changed it); commit unrelated prerequisite fixes as their own commit first.

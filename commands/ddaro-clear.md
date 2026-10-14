@@ -1,27 +1,21 @@
 ---
 name: ddaro:clear
-description: "Post-merge cleanup. The single code path that removes a worktree. Requires cwd == main (refuses with cd instructions otherwise). Applies to owned and adopted identically once the branch is merged. Refuses unmerged - use /ddaro:merge first, or /ddaro:abandon (owned) / git worktree remove --force (adopted) to force-discard."
+description: "Remove a merged ddaro worktree (run from the main worktree)."
 argument-hint: "[name]"
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
+disable-model-invocation: true
 ---
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:clear [name]" and execute with `$ARGUMENTS` as an optional name.
+# /ddaro:clear
 
-- **Precondition - cwd must equal `config.main_worktree`**. If not, print a helpful refusal:
-  ```
-  ✗ /ddaro:clear must run from main.
-    cd <config.main_worktree>
-    /ddaro:clear <name>
-  ```
-  Do not execute any deletion on mismatch.
-- **Target resolution**:
-  - No name → list merged ddaro-owned + adopted worktrees as candidates; let the user pick.
-  - Name given → match against `LOCK.branch` or worktree folder basename.
-- **Merge confirmation**: `git branch --merged <base>` must include the target's branch. If not, refuse and suggest `/ddaro:merge` first, or `/ddaro:abandon` (owned only) / `git worktree remove --force` (adopted).
-- **Execute, in order**:
-  - `git branch -d <branch>` (refuses if unmerged - expected safety).
-  - `git push origin --delete <branch>` (prompt y/n if the remote ref still exists; skip silently if it does not).
-  - `git worktree remove <path>` (context dir inside `.ddaro/` is gone with it).
-- **Report**: confirm to the user. cwd stays at main so the next action proceeds naturally.
+<!-- step0 -->
+**Step 0.** Find `.ddaro/config.json` in cwd or a parent; in a linked worktree with none, use the main worktree's (`git rev-parse --path-format=absolute --git-common-dir`, then its parent). None found: say "not a ddaro project - run /ddaro:start" and stop (`/ddaro:start` runs first-time setup instead). Then run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd if in main, else `.ddaro/LOCK` `main_worktree`, else `config.main_worktree`) and show its line if it prints one. Terms: "main worktree" = the folder `config.main_worktree` (receives merges only); `<base>` = `config.base_branch` (default `main`), `origin/<base>` its remote-tracking ref; never hardcode a branch name. Reply in `config.language`. If a ddaro script exits non-zero or python is missing, print `[ddaro] <script> <subcommand> failed (exit N): <first stderr line>` and continue; never hand-write `.ddaro/context/*`, `CURRENT.md`, or the config keys `base_branch` / `auto_snapshot` / `schema_version`.
+<!-- /step0 -->
 
-Applies identically to Tier 1 (owned) and Tier 2 (adopted). Tier differences live only in `/ddaro:abandon`.
+Must run from the main worktree; otherwise print `cd <main_worktree>` + `/ddaro:clear <name>` and do nothing.
+
+1. No name: list owned/adopted worktrees whose branch is in `git branch --merged <base>` and let the user pick. Name: match `LOCK.branch` or the folder name.
+2. Refuse if the target is main, protected, external, or unmanaged, or if its branch is not in `git branch --merged <base>`; suggest `/ddaro:merge` first, or `/ddaro:abandon` to discard.
+3. Uncommitted changes in the target: show them and stop (clear never discards uncommitted work).
+4. `git worktree remove <path>`; if the folder is still on disk afterwards, remove it only when it is empty, then `git worktree prune`. `git branch -d <branch>`. If `origin/<branch>` exists ask y/n before `git push origin --delete <branch>`.
+5. Report what was removed. cwd stays in main.

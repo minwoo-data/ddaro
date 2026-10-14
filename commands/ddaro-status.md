@@ -1,19 +1,19 @@
 ---
 name: ddaro:status
-description: "Show current ddaro worktree status - branch, lock match, commits ahead of <base>, uncommit, push state, context snapshot count, next suggested action."
+description: "Show this worktree's ddaro state; in main, the worktree list."
 argument-hint: ""
 allowed-tools: [Bash, Read, Glob, Grep]
+disable-model-invocation: true
 ---
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:status" and execute.
+# /ddaro:status
 
-- Detect cwd category:
-  - Step 0: resolve config (walk up; linked worktree falls back to main) and run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>`; show its line if any.
-  - **Inside a ddaro worktree** (has `.ddaro/OWNED`; LOCK `adopted=true` for adopted) → local status view (below).
-  - **Inside `config.main_worktree`** → auto-delegate to `/ddaro:list` directly (no second command needed). Print a one-line header "You're in main — showing worktree inventory:" then run list.
-  - **Neither** → print "cwd is not under ddaro management" + suggest `cd <main>` + `/ddaro:list`.
-- Local status view (for in-worktree case):
-  - Read `.ddaro/LOCK`, compare with current branch.
-  - Count commits ahead of <base>, uncommitted files, push status (origin up-to-date / ahead / behind).
-  - Count context snapshots in `.ddaro/context/`.
-  - Recommend next action (commit / merge / continue editing / resume if crash evidence).
+<!-- step0 -->
+**Step 0.** Find `.ddaro/config.json` in cwd or a parent; in a linked worktree with none, use the main worktree's (`git rev-parse --path-format=absolute --git-common-dir`, then its parent). None found: say "not a ddaro project - run /ddaro:start" and stop (`/ddaro:start` runs first-time setup instead). Then run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd if in main, else `.ddaro/LOCK` `main_worktree`, else `config.main_worktree`) and show its line if it prints one. Terms: "main worktree" = the folder `config.main_worktree` (receives merges only); `<base>` = `config.base_branch` (default `main`), `origin/<base>` its remote-tracking ref; never hardcode a branch name. Reply in `config.language`. If a ddaro script exits non-zero or python is missing, print `[ddaro] <script> <subcommand> failed (exit N): <first stderr line>` and continue; never hand-write `.ddaro/context/*`, `CURRENT.md`, or the config keys `base_branch` / `auto_snapshot` / `schema_version`.
+<!-- /step0 -->
+
+Read-only.
+
+- cwd in the main worktree: print "You're in main - worktree inventory:" and do `${CLAUDE_PLUGIN_ROOT}/commands/ddaro-list.md`.
+- cwd in an owned/adopted worktree: show path, branch (lock matches or not), topic, created (from LOCK), commits ahead of `<base>`, uncommitted files, push state vs upstream, snapshot count in `.ddaro/context/`, and one suggested next step (commit / merge / keep editing / `/ddaro:resume` if the last snapshot is old and work is uncommitted).
+- anywhere else: "cwd is not under ddaro" + suggest `cd <main_worktree>` and `/ddaro:list`.
