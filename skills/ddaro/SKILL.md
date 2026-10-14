@@ -1,7 +1,7 @@
 ---
 name: ddaro
-description: "Worktree-based parallel workflow with dev-cycle orchestration (0.4.0). Create isolated worktree + branch, adopt existing worktrees, commit with deletion-aware checks (now opt-in --verify), review and merge to main by diff size driven through CI (polling + hard-capped fix loop + idempotency + confirm gate + sync-main content-diff preview), recover from session/IDE crashes via per-commit context MD. Subcommands: start / adopt / resume / commit / merge / clear / status / list / summary / abandon / setting / config. Hooks: main_protection / branch_naming / cross_worktree_check / branch_worktree_match / evidence_check (all opt-in, default off). Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
-version: "0.4.0"
+description: "Worktree-based parallel workflow with dev-cycle orchestration (0.8.0: config.base_branch replaces the hardcoded main merge target; every plain git commit in a ddaro worktree gets an automatic context snapshot via a PostToolUse hook; context MDs are written only by hooks/context_md.py). Create isolated worktree + branch, adopt existing worktrees, commit with deletion-aware checks (now opt-in --verify), review and merge to main by diff size driven through CI (polling + hard-capped fix loop + idempotency + confirm gate + sync-main content-diff preview), recover from session/IDE crashes via per-commit context MD. Subcommands: start / adopt / resume / commit / merge / clear / status / list / abandon / config / go / spec / review / check. Hooks: main_protection / branch_naming / cross_worktree_check / branch_worktree_match / evidence_check (all opt-in, default off). Language: english or korean (config). Korean triggers: 따로, 병렬로, 분리해서, main 건드리지 마. English: parallel, isolated, separate branch."
+version: "0.8.0"
 author: "haroom"
 repository: "https://github.com/minwoo-data/ddaro"
 license: "MIT"
@@ -14,6 +14,15 @@ license: "MIT"
 Main worktree is never touched. Work happens in dedicated worktrees, one branch each, with lock files and on-disk context snapshots. Designed for parallel Claude Code sessions that must not stomp on each other.
 
 **Design principle**: 1 worktree = 1 branch = 1 Claude session. Physical isolation prevents file collisions. Context MDs survive VS Code crashes and session restarts.
+
+---
+
+## 용어
+
+- **main worktree**: the Tier 0 folder (`config.main_worktree`). It only receives merges. In this document "main" always means this *folder*, never a branch.
+- **`<base>`**: the value of `config.base_branch` (default `main`) - the branch work is merged into (`main`, `master`, `develop`, ...). Written bare, `<base>` is the LOCAL ref (merge checks, ahead counts); `origin/<base>` is the remote-tracking ref (conflict dry-run, reset). It is detected once by `hooks/config_tool.py ensure-schema` and stored; prompts never hardcode a branch name.
+- **`<main_worktree>`**: placeholder for the absolute path of the main worktree.
+- **snapshot**: `<worktree>/.ddaro/context/<ts>-<sha7>.md`, one per commit, plus `<worktree>/.ddaro/CURRENT.md`. Both are written ONLY by `hooks/context_md.py` (hook mode on every `git commit`, `init` from start/adopt, `enrich` from /ddaro:commit). Prompts read them; they never write them by hand.
 
 ---
 
@@ -100,7 +109,7 @@ Ordering matters: a stray `.ddaro/OWNED` file in the main worktree does not gran
 | `/ddaro:clear`          | ✗    | ✓     | ✓       | ✗         | ✗         | ✗        |
 | `/ddaro:abandon`        | ✗    | ✓     | **✗**   | ✗         | ✗         | ✗        |
 | `/ddaro:resume`         | ✗    | ✓     | ✓       | ✗         | ✗         | ✗        |
-| `/ddaro:summary`        | n/a  | ✓     | ✓       | n/a       | git-log only | ✗      |
+| `/ddaro:resume --recap-only` | n/a | ✓  | ✓       | n/a       | git-log only | ✗      |
 | `/ddaro:list`           | show | show  | show    | show      | show      | show (optional section) |
 | `/ddaro:status`         | show | ✓     | ✓       | show      | show      | ✗        |
 
@@ -120,7 +129,7 @@ Destructive commands must be run from the **main worktree**, not from inside the
 | `/ddaro:merge`        | the target ddaro/adopted worktree  | lock-check warning; merge stays here, cleanup is **handed off** to `/ddaro:clear` at main |
 | `/ddaro:clear`        | **`config.main_worktree`**         | refuse + print `cd <main>` and the exact `/ddaro:clear` command to re-run |
 | `/ddaro:abandon`      | **`config.main_worktree`**         | same as clear |
-| `/ddaro:list` / `:status` / `:summary` / `:resume` | any | — |
+| `/ddaro:list` / `:status` / `:resume` | any | — |
 
 By forcing clear/abandon to run at main, the "where do I go after the folder disappears?" problem is solved structurally: the user is already in main when the delete happens, so there is no stale cwd.
 
@@ -149,12 +158,10 @@ One removal code path (`/ddaro:clear`) instead of two reduces surface area for b
 | `/ddaro:merge` | Pre-flight check + review + merge + cleanup hand-off | Work complete |
 | `/ddaro:status` | Current worktree state | Quick check |
 | `/ddaro:list` | All worktrees, grouped by tier | Overview |
-| `/ddaro:summary [name]` | Content recap from commits + context | Read-only "what did I do?" |
 | `/ddaro:resume` | Pick a worktree + recap + cd + paste prompt | Crash recovery / returning after days |
 | `/ddaro:clear [name]` | Delete merged worktree post-hoc (run from main) | After `merge` with "keep" choice, or any cleanup |
 | `/ddaro:abandon <name>` | 3-layer guarded force-discard (owned only, run from main) | Work went wrong |
-| `/ddaro:setting` | Interactive settings menu | Browse and change config |
-| `/ddaro:config [key] [val]` | Direct config access | Known key, fast change |
+| `/ddaro:config [key] [val]` | No args: interactive menu. With args: direct key set | Browse or change config |
 
 Also callable as `/ddaro <subcommand> [args]`.
 
@@ -187,7 +194,7 @@ Also callable as `/ddaro <subcommand> [args]`.
 | `fruit` | peach, kiwi, mango | 10 |
 | `greek` | alpha, beta, gamma | 10 |
 
-Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config pool <key>`.
+Change via `/ddaro:config` (menu) or `/ddaro:config naming <key>` / `/ddaro:config pool <key>`.
 
 ---
 
@@ -197,9 +204,11 @@ Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config poo
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "main_worktree": "C:\\path\\to\\myapp",
   "project_name": "myapp",
+  "base_branch": "main",
+  "auto_snapshot": "on",
   "protected_worktrees": [
     "C:\\path\\to\\myapp",
     "C:\\path\\to\\myapp-experiments"
@@ -235,7 +244,9 @@ Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config poo
 
 ### Field reference
 
-- **`schema_version`**: integer, currently `2` (was `1` in v0.2.1; v0.2.4 adds `external_patterns`, `planning_patterns`, `main_protection`). On load, if the value does not match the current schema, ddaro runs a named migration before use.
+- **`schema_version`**: integer, currently `3` (`1` in v0.2.1; `2` in v0.2.4 added `external_patterns`, `planning_patterns`, `main_protection`; `3` in 0.8.0 added `base_branch`, `auto_snapshot`). Migration is `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` - idempotent, run by every subcommand's Step 0, writes atomically (temp file + rename), preserves unknown keys. The first-run wizard still writes `schema_version: 2`; ensure-schema lifts it to 3 immediately afterwards.
+- **`base_branch`** *(new in 0.8.0)*: the merge-target branch (`<base>` everywhere in this document). Absent -> `main`. Filled by `ensure-schema` (origin/HEAD -> local `main` -> local `master` -> `main`). Change with `/ddaro:config base_branch <name>`. Symptom of a wrong value: `/ddaro:clear` sees merged branches as unmerged, or `/ddaro:status` shows an absurd ahead count.
+- **`auto_snapshot`** *(new in 0.8.0)*: `on` (default) | `off`. Gates ONLY the PostToolUse hook that snapshots plain `git commit`s. `off` means "snapshot only when /ddaro:commit runs" (0.7.0 behaviour). `context_persistence: false` wins over both.
 - **`main_worktree`**: absolute path to the clean main-branch worktree. ddaro never mutates this.
 - **`protected_worktrees`**: paths ddaro will refuse to create in or delete. Auto-populated during init setup plus sibling folders user flags. Defines **Tier 3**.
 - **`external_patterns`** *(new in 0.2.4)*: glob patterns for worktrees owned by other tools (e.g. Claude Code agent worktrees). ddaro ignores these entirely. Defines **Tier 5**.
@@ -245,7 +256,7 @@ Change via `/ddaro:setting` or `/ddaro:config naming <key>` / `/ddaro:config poo
 - **`stale_days`**: `/ddaro:list` marks worktrees older than this as `STALE`.
 - **`naming_strategy`** + **`name_pool`**: control auto-generated names.
 - **`language`**: `english` (default) or `korean`. Affects all subcommand output.
-- **`context_persistence`**: `true` (default) writes `.ddaro/context/*.md` per commit.
+- **`context_persistence`**: `true` (default) allows context MD writes at all (hook, `/ddaro:commit` enrich, start/adopt init). `false` disables every write.
 - **`main_protection`** *(new in 0.2.4)*: `off` (default), `warn`, or `strict`. Controls whether hooks block direct mutation of the main worktree. See "Main protection hooks" below.
 - **`evidence_check`** *(new in 0.4.0)*: `off` (default), `warn`, or `strict`. Controls a PreToolUse hook on Edit/Write that nudges (warn) or requires (strict) a fresh evidence token before applying the change. See "Evidence-check hook" below.
 - **`evidence_token_ttl_seconds`** *(new in 0.4.0)*: integer 30..86400, default 300 (5 minutes). Lifetime of `.ddaro/evidence-token` before strict mode treats it as stale.
@@ -281,7 +292,7 @@ ddaro only plants this file in worktrees it created. **Absent → not a cleanup 
 
 ## Hook registration *(plugin-native, new in 0.5.0)*
 
-All ddaro protective hooks are registered by the plugin itself, in `hooks/hooks.json` at the plugin root. They are active automatically whenever the ddaro plugin is enabled - **projects no longer add anything to `.claude/settings.json`.** In `/hooks` they appear under the `Plugin` source.
+All ddaro hooks are registered by the plugin itself, in `hooks/hooks.json` at the plugin root. Besides the protective PreToolUse/SessionStart hooks, 0.8.0 adds one PostToolUse hook on `Bash` (`hooks/context_md.py hook`) that writes a context snapshot after any `git commit` inside a ddaro-managed worktree, including `cd <worktree> && git commit` and Git Bash `/c/...` paths (gated by `auto_snapshot` / `context_persistence`; silent otherwise; never blocks; a non-commit Bash call exits before any heavy import). They are active automatically whenever the ddaro plugin is enabled - **projects no longer add anything to `.claude/settings.json`.** In `/hooks` they appear under the `Plugin` source.
 
 This is safe because every hook is **config-gated and fail-open**: each script walks up from cwd looking for `.ddaro/config.json` and returns immediately (exit 0, no output) when the file is absent or the relevant mode is `off`. A project that never ran `/ddaro:start`, or has the mode off, sees zero noise and zero blocking. Python missing / config unparseable -> also a clean exit 0.
 
@@ -457,67 +468,88 @@ Every subcommand validates `current branch == lock.branch`. On mismatch, it prin
 
 The `.ddaro/` directory is kept out of git by appending a single `.ddaro/` line to the project's root `.gitignore` at `<main_worktree>/.gitignore` on first `/ddaro:start` (added once if absent).
 
-**Crash recovery**: after VS Code dies or Claude Code session ends, `/ddaro:summary` reads these files to rebuild context. No user setup needed.
+**Crash recovery**: after VS Code dies or Claude Code session ends, `/ddaro:resume` (or `/ddaro:resume --recap-only`) reads these files to rebuild context. No user setup needed. Since 0.8.0 the files are written by `hooks/context_md.py` only (see "Context MD Formats").
 
 ---
 
 ## Context MD Formats
 
+Both files are generated by `${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py`; the headings below are the exact strings the script writes and matches (`HEADINGS` constant, exact match, no suffixes). Every file starts with the marker `<!-- ddaro-context v1 -->`. Prompts read these files (`/ddaro:resume`) and feed summaries in through `enrich`; they never write them by hand.
+
+Writers:
+
+```bash
+python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py hook                               # PostToolUse(Bash): snapshot after any git commit (automatic)
+python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py init <root> --topic "<topic>" [--adopted]   # CURRENT.md only (start / adopt)
+python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py write <root>                       # snapshot HEAD now (idempotent; fills a commit the hook missed)
+python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py enrich <root> <sha7>               # stdin JSON; /ddaro:commit step 8
+```
+
+The hook only sees commits made through Claude Code's Bash tool; commits from another terminal or an IDE are picked up later by `/ddaro:commit` (enrich creates the missing snapshot) or `write`.
+
 ### Per-commit snapshot
 
 ```markdown
+<!-- ddaro-context v1 -->
 # d-fox - Commit a1b2c3d
 
 **Time**: 2026-04-23 10:00:00
 **Branch**: d-fox
-**Ahead of main**: 1 commit
+**Ahead of base (<base>)**: 1 commit(s)
 
 ## Commit message
 <commit message>
 
-## Files changed (N files, +X -Y)
+## Files changed
+N files, +X -Y
 - <file1> (+X -Y)
 - <file2> (+X -Y)
 
 ## What was done
-<Claude-generated one-line summary of this commit's intent>
+<commit message first line until /ddaro:commit enriches it>
 
 ## Next planned (inferred)
-<TODOs found in code, unfinished tests, obvious next steps>
+(auto) run /ddaro:commit to enrich, or /ddaro:resume
 
 ## Review flags raised
-<FLAG entries from deletion classifier, or "None">
+(auto) not analyzed
 ```
 
 ### CURRENT.md
 
 ```markdown
+<!-- ddaro-context v1 -->
 # d-fox - Current State
 
 **Last updated**: 2026-04-23 12:30:00
 **Branch**: d-fox
-**Total commits**: 3 ahead of main
+**Total commits**: 3 ahead of base (<base>)
 **Push status**: origin/d-fox up to date
 **Uncommit**: none
 
 ## Journey so far
-1. [10:00] Worktree created, branch d-fox from main@<sha>
+1. [10:00] Worktree created, branch d-fox from <base>@<sha7>
 2. [11:15] Commit b2c3d4e - <message>
 3. [12:30] Commit c3d4e5f - <message>
 
 ## Currently
-Idle (last commit N min ago). Ready for next edit or /ddaro:merge.
+(auto) committed c3d4e5f just now
 
 ## Resume hint
 If this session restarts:
 - cwd: <worktree path>
-- Last goal: <topic from lock + recent commit intent>
-- Next expected: <inferred from last commit + TODOs>
+- Last goal: <LOCK.topic>
+- Next expected: (auto) see /ddaro:resume
 ```
+
+The Journey block is preserved across rewrites (any file with the exact `## Journey so far` heading, marker or not); only a missing file resets it.
 
 ---
 
 ## /ddaro:start [name]
+
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
 
 1. **Config check**: if `.ddaro/config.json` missing, run initial 5-step setup (language → main worktree → protected list → naming strategy → name pool).
 2. **Existing-worktree scan**: list all worktrees grouped by tier so the user can pick an existing path instead of creating a new one:
@@ -564,14 +596,14 @@ If this session restarts:
    ```bash
    git -C <main_worktree> worktree add \
      <main_worktree>/../<project>-d-<name> \
-     -b d-<name> main
+     -b d-<name> <base>
    ```
 7. **Plant ownership + lock + context dir**:
    - `mkdir <worktree>/.ddaro/context/`
    - `touch <worktree>/.ddaro/OWNED`
    - Write `<worktree>/.ddaro/LOCK` (JSON with branch, topic, created_at, main_worktree, language)
    - Append `.ddaro/` to `<main_worktree>/.gitignore` if the line is not already present (once per project).
-   - Write initial `<worktree>/.ddaro/CURRENT.md`
+   - `python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py init <worktree> --topic "<topic>"` (writes the initial `CURRENT.md`; never write it by hand)
 8. **Output copy-paste prompt** (in config language):
    ```
    ✓ Worktree created: <path>
@@ -590,6 +622,9 @@ If this session restarts:
 ---
 
 ## /ddaro:adopt <path>
+
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
 
 Bring an existing non-ddaro worktree under ddaro management. Use this when you already have a worktree (made by `git worktree add`, inherited from a teammate, created by another tool) and you want ddaro's commit/merge/context flow to apply to it - **without moving any code, without renaming the branch, without recreating anything**.
 
@@ -621,7 +656,7 @@ The refusal prints why plus what the user can do instead (unprotect, or just kee
    ```
    Target:        C:/.../receipt_processor-ui
    Branch:        feat/phase-15-v28b-pending-ui   (kept as-is)
-   Commits ahead of main: 14
+   Commits ahead of <base>: 14
    Uncommitted:   2 files
    Pushed:        origin/feat/phase-15-v28b-pending-ui up to date
    ```
@@ -643,12 +678,12 @@ The refusal prints why plus what the user can do instead (unprotect, or just kee
      }
      ```
    - Append `.ddaro/` to `<main_worktree>/.gitignore` if absent (same one-time rule as `/ddaro:start`).
-   - Write initial `<path>/.ddaro/CURRENT.md` noting "adopted from external worktree".
+   - `python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py init <path> --topic "<topic>" --adopted` (writes the initial `CURRENT.md` noting the adoption; never write it by hand).
 6. **Output summary**:
    ```
    ✓ Adopted: C:/.../receipt_processor-ui
      Branch:     feat/phase-15-v28b-pending-ui   (kept as-is)
-     Status:     14 commits ahead of main, 2 uncommit
+     Status:     14 commits ahead of <base>, 2 uncommit
      Topic:      <topic>
 
    From now on you can use: /ddaro:commit, /ddaro:merge, /ddaro:resume, /ddaro:clear
@@ -673,6 +708,9 @@ adopt → commit (repeat) → merge → clear
 ---
 
 ## /ddaro:commit [--verify] [message]
+
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
 
 Repeatable per edit chunk. Each call writes a context snapshot.
 
@@ -770,27 +808,33 @@ These are conventions, not gates. The runtime check that actually fails the comm
 
 6. **Commit**: `git commit -m "<message>"`. If no message, auto-generate `ddaro: d-<name> - N files (+X -Y)` (ASCII hyphen so pre-commit hooks rejecting non-ASCII do not choke). If the hook still rejects, stop and ask the user for a message - never retry with `--no-verify`.
 7. **Push**: `git push origin d-<name>`. Every commit backs up to remote.
-8. **Context write** (if `context_persistence: true`):
-   - Create `<worktree>/.ddaro/context/<ISO-timestamp>-<sha7>.md` with:
-     - Commit message, diff stat, file list
-     - "What was done" (Claude reads diff → one-line summary)
-     - "Next planned" (TODO comments, unfinished tests scan)
-     - Review flags raised during this commit
-   - Overwrite `<worktree>/.ddaro/CURRENT.md`:
-     - Append this commit to Journey
-     - Refresh Currently / Resume hint
+8. **Context enrich** (always; the script decides):
+   The PostToolUse hook already wrote `.ddaro/context/<ts>-<sha7>.md` and refreshed `CURRENT.md` when step 6 committed. This step only adds the Claude-written parts. Get `<sha7>` with `git rev-parse --short=7 HEAD`, then:
+   ```bash
+   python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py enrich <worktree> <sha7> <<'JSON'
+   {"what_was_done": "<one-line intent of this commit>",
+    "next_planned": "<TODOs found, unfinished tests, obvious next step>",
+    "review_flags": "<FLAG entries from step 4, verify-bypass note if step 5.6 chose c, or None>",
+    "currently": "Idle (just committed)",
+    "resume_hint": {"last_goal": "<topic + recent intent>", "next_expected": "<next step>"}}
+   JSON
+   ```
+   stdout `enriched <sha7>` = normal; `created+enriched <sha7>` = the hook had not run (auto_snapshot off, or the commit was made outside the Bash tool) so the snapshot was created now. Non-zero exit = report `[ddaro] context_md.py enrich failed (exit N): <stderr>` and continue; never write the MD by hand. `context_persistence: false` makes the script a silent no-op.
 9. **Report**:
    ```
    ✓ Commit:         <sha7>
    ✓ Changes:        N files (+X -Y)
    ✓ Push:           origin/d-<name> (up to date)
-   ✓ Ahead of main:  K commits
+   ✓ Ahead of <base>:  K commits
    ✓ Context saved:  .ddaro/context/<filename>
    ```
 
 ---
 
 ## /ddaro:merge
+
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
 
 Work complete, time to ship.
 
@@ -799,7 +843,7 @@ Work complete, time to ship.
 ```
    IDLE
     ↓ /ddaro:merge invoked
-   FETCHED          (origin/main pulled, conflicts dry-run-checked)
+   FETCHED          (origin/<base> pulled, conflicts dry-run-checked)
     ↓
    CHECKED          (deletion-scan + size band classified + final y/n confirmed)
     ↓ PR path                                           ↓ --local path
@@ -810,7 +854,7 @@ Work complete, time to ship.
    MERGED         user-confirmed fix loop      escalate to user
                   (hard cap; see step 9.5b)
     ↓
-   SYNCED         (local branch reset to origin/main after squash)
+   SYNCED         (local branch reset to origin/<base> after squash)
 ```
 
 Terminal states: MERGED, SYNCED, ABORTED, ESCALATED.
@@ -818,7 +862,7 @@ Terminal states: MERGED, SYNCED, ABORTED, ESCALATED.
 Forbidden transitions:
 - MERGED → CI_PENDING (re-running checks after the squash has already landed)
 - CHECKED → MERGED on PR path (must pass through CI_*)
-- any → MERGED from a non-FETCHED state (the origin/main fetch is the gate against TOCTOU between local check and remote merge)
+- any → MERGED from a non-FETCHED state (the origin/<base> fetch is the gate against TOCTOU between local check and remote merge)
 
 Stuck-state detection:
 - CI_STUCK = "no checks reported in 60 seconds since CI_PENDING transition". This is distinct from CI_FAIL and is NOT retried automatically (retrying on infra silence wastes the fix-loop budget). Escalate to the user with the PR URL.
@@ -832,10 +876,10 @@ Stuck-state detection:
 3. **Origin refresh**: `git fetch origin`.
 4. **Pre-flight conflict check**:
    ```bash
-   git merge-tree $(git merge-base HEAD origin/main) HEAD origin/main
+   git merge-tree $(git merge-base HEAD origin/<base>) HEAD origin/<base>
    ```
    If conflicts reported, list files and stop. User must rebase or resolve before retry.
-5. **Diff size measurement** (`main..HEAD`):
+5. **Diff size measurement** (`<base>..HEAD`):
    - small: `lines ≤ 50 AND files ≤ 2`
    - medium: not small, and `lines ≤ 300 AND files ≤ 10`
    - large: `lines > 300 OR files > 10`
@@ -843,17 +887,17 @@ Stuck-state detection:
    - small → deletion re-confirm only
    - medium → deletion re-confirm + size warning printed to user
    - large → deletion re-confirm + size warning + pure-deletion re-scan across the full diff
-   - `--review=<prism|triad>` (optional, opt-in only): if the named plugin is detected on disk (stat-check `${HOME}/.claude/plugins/cache/haroom_plugins/<name>/` or `${HOME}/.claude/skills/<name>/`), hand it the merge diff: `prism` -> `/prism --diff main...HEAD` (defect lenses + Evidence pass - the reviewer for code); `triad` -> only the markdown files the diff touches (triad >=0.2.0 refuses code; if the diff has no docs, say so and suggest `--review=prism`). If the plugin is not installed, stop and print the install hint (`/plugin marketplace add https://github.com/minwoo-data/haroom_plugins.git` then `/plugin install <name>`). Never auto-invoked from the size band alone.
+   - `--review=<prism|triad>` (optional, opt-in only): if the named plugin is detected on disk (stat-check `${HOME}/.claude/plugins/cache/haroom_plugins/<name>/` or `${HOME}/.claude/skills/<name>/`), hand it the merge diff: `prism` -> `/prism --diff <base>...HEAD` (defect lenses + Evidence pass - the reviewer for code); `triad` -> only the markdown files the diff touches (triad >=0.2.0 refuses code; if the diff has no docs, say so and suggest `--review=prism`). If the plugin is not installed, stop and print the install hint (`/plugin marketplace add https://github.com/minwoo-data/haroom_plugins.git` then `/plugin install <name>`). Never auto-invoked from the size band alone.
 7. **Pure-deletion re-scan**: whole-diff check - anything that existed on main but disappears in the merge gets flagged.
 8. **Final y/n** from user.
 9. **Merge method**:
-   - **PR path (default)**: `gh pr create` → print PR URL → continue to step 9.5 for CI orchestration. (In 0.3.x this step ended here; 0.4.0 drives the PR through CI to the squash merge.)
+   - **PR path (default)**: `gh pr create --base <base>` → print PR URL → continue to step 9.5 for CI orchestration. (In 0.3.x this step ended here; 0.4.0 drives the PR through CI to the squash merge.)
      - Optional: include CURRENT.md's Journey section in PR body.
    - **Local path** (`--local` flag): output the following copy-paste block to the user (skip step 9.5 entirely):
      ```
      Local merge - run in the main worktree:
        cd <main_worktree>
-       git merge d-<name>
+       git merge d-<name>   # <base> checked out here
        git push
      ```
 
@@ -947,7 +991,7 @@ Stuck-state detection:
    Ready to squash-merge PR #<N>:
      gh pr merge <N> --squash --delete-branch=false
 
-   Branch: d-<name>  →  main
+   Branch: d-<name>  →  <base>
    Commits to squash: K
    Net change:        +X -Y lines, N files
 
@@ -956,12 +1000,12 @@ Stuck-state detection:
 
    Default is `n` so accidental Enter does not merge. The state machine treats `n` as ABORTED (terminal); the user re-runs /ddaro:merge when ready. This matches the `/ddaro:clear` UX convention: irreversible actions print + wait, never auto-execute.
 
-   `--delete-branch=false` because the project's convention (per the `git-sync-main-after-merge` pattern documented in the ddaro README) is to reuse the same worktree/branch for the next chunk. The branch is reset to origin/main in step 10 (see D12 cleanup hand-off), not deleted.
+   `--delete-branch=false` because the project's convention (per the `git-sync-main-after-merge` pattern documented in the ddaro README) is to reuse the same worktree/branch for the next chunk. The branch is reset to origin/<base> in step 10 (see D12 cleanup hand-off), not deleted.
 10. **Post-merge cleanup hand-off** (the merge never deletes its own worktree - see "cwd rules"):
 
     **Reuse-branch cleanup (default in 0.4.0)** *(when `--delete-branch=false` was passed in step 9.6c)*:
 
-    The default convention is to reset the local branch onto origin/main so the same worktree can be used for the next chunk. Step 11a shows the diff before applying.
+    The default convention is to reset the local branch onto origin/<base> so the same worktree can be used for the next chunk. Step 11a shows the diff before applying.
 
     **Delete-branch cleanup (legacy 0.3.x path)** *(when explicitly opted in)*:
 
@@ -981,26 +1025,26 @@ Stuck-state detection:
 
     **a. Reuse-branch path — sync-main diff preview** *(new in 0.4.0)*:
 
-    Before resetting the local branch onto origin/main, show what would change so the user can sanity-check that the squashed PR really captured the local work and that nothing else is being silently discarded:
+    Before resetting the local branch onto origin/<base>, show what would change so the user can sanity-check that the squashed PR really captured the local work and that nothing else is being silently discarded:
 
     ```
     Squash merge landed as: <squash-commit-sha7>
     Local branch head:      <local-commit-sha7>
 
-    Content diff (origin/main vs current branch):
+    Content diff (origin/<base> vs current branch):
       <files differing, line counts>
 
-    Files in origin/main that the local branch doesn't have:
+    Files in origin/<base> that the local branch doesn't have:
       <file list, usually empty after a clean squash>
-    Files on the local branch that origin/main doesn't have:
+    Files on the local branch that origin/<base> doesn't have:
       <file list - if non-empty, your work didn't make it into the squash>
 
-    Reset local branch to origin/main?  [y/n] [y]:
+    Reset local branch to origin/<base>?  [y/n] [y]:
     ```
 
     Default is `y` because the post-squash sync is the expected next step. A non-empty "local has, main doesn't" list is the danger signal - the user should abort and investigate before reset. Implementation note: this preview matches the guard in the project's git sync-main alias (`!f() { ... if git merge-base --is-ancestor ... ; }`), so behavior is consistent whether the user runs the alias manually or lets /ddaro:merge drive it.
 
-    On `y`: `git fetch origin main && git reset --hard origin/main`. Branch now mirrors main, ready for the next /ddaro:start equivalent OR for a new chunk on the same branch.
+    On `y`: `git fetch origin <base> && git reset --hard origin/<base>`. Branch now mirrors <base>, ready for the next /ddaro:start equivalent OR for a new chunk on the same branch.
 
     On `n`: leave the branch as-is. The user can inspect or run `/ddaro:clear` later.
 
@@ -1022,6 +1066,9 @@ Stuck-state detection:
 ---
 
 ## /ddaro:clear [name]
+
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
 
 Clean up ddaro-owned or adopted worktrees whose branches are already merged to main. This is the **single code path** that actually removes a worktree - `/ddaro:merge` only hands off to it. (Renamed from `/ddaro:clean` in v0.1.2; the deprecated alias was removed in v0.2.0.)
 
@@ -1050,7 +1097,7 @@ This rule makes "where does the shell end up after the target vanishes?" a non-i
 2. **Target resolution**:
    - No name → list all merged ddaro-owned + adopted worktrees as candidates, let the user pick.
    - Name given → resolve to a single worktree (match against `LOCK.branch` or worktree folder name).
-3. **Merge confirmation**: `git branch --merged main` must list the target's branch. If not:
+3. **Merge confirmation**: `git branch --merged <base>` must list the target's branch. If not:
    - Unmerged → refuse; suggest `/ddaro:merge` first, or `/ddaro:abandon` (owned only) / plain `git worktree remove --force` (adopted) to force-discard.
 4. **Execute**:
    - `git branch -d <branch>` (safe - refuses if unmerged; catches the branch-in-another-worktree case).
@@ -1064,6 +1111,9 @@ This rule makes "where does the shell end up after the target vanishes?" a non-i
 
 ## /ddaro:status
 
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
+
 Read-only. Based on current cwd.
 
 If cwd is a ddaro worktree (has `.ddaro/OWNED`):
@@ -1074,7 +1124,7 @@ Branch:           d-<name>  (lock matches ✓)
 Topic:            <topic>
 Created:          <timestamp> (Nh ago)
 
-Commits:          K ahead of main
+Commits:          K ahead of <base>
 Uncommit:         N files modified
 Push status:      origin/d-<name> up to date
 Context saved:    M snapshots in .ddaro/context/
@@ -1088,6 +1138,9 @@ If cwd is not a ddaro worktree: inform user and suggest `/ddaro:list`.
 ---
 
 ## /ddaro:list
+
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
 
 Walk all worktrees in `git worktree list --porcelain`, classify each one by tier (see "Worktree tiers"), and print them grouped.
 
@@ -1128,71 +1181,12 @@ Warnings:
 
 ---
 
-## /ddaro:summary [name]
-
-Content-based recap. **User supplies no goal at `start` time** - Claude reconstructs from commits, diffs, and context MDs.
-
-### Data sources
-
-| Output | From |
-|---|---|
-| What was worked on | `git log main..HEAD` + `git diff --stat` + `.ddaro/context/*.md` "What was done" |
-| Where it stopped | `git status` + `.ddaro/CURRENT.md` Resume hint + minutes since last commit |
-| Next recommended | Context MD "Next planned" + TODO scan + unfinished tests |
-
-### No arg → brief summary per worktree
-
-```
-ddaro worktrees (3 / 10):
-
-━━━ d-fox (2h ago) ━━━━━━━━━━━━━━━━━━━━━
-  <one-line recap>
-  → 1 uncommit, 3 commits pushed
-
-━━━ d-billing (30m ago) ━━━━━━━━━━━━━━━━
-  <one-line recap>
-  → 1 uncommit, 5 commits pushed
-
-━━━ d-auth (8d ago) ⚠ STALE ━━━━━━━━━━━━
-  [merged → main] <recap>
-  → /ddaro:clear recommended
-```
-
-### With name → detailed recap
-
-```
-━━━ d-fox ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Branch:   d-fox
-Created:  2026-04-23 10:00 (2h ago)
-Lock:     matches ✓
-
-Progress:
-  Commits:  3 ahead of main · pushed
-  Uncommit: 1 file modified
-
-━ What was being worked on ━
-  <Claude reads commits + context, generates 2-3 line synthesis>
-
-━ Where it stopped ━
-  Currently editing: <file>
-  (Nm since last commit, uncommit present)
-  Most recent edit: <snippet>
-  Inferred: <what the user appears to be doing>
-
-━ Next recommended ━
-  • Finish uncommit → /ddaro:commit
-  • Then /ddaro:merge (size: medium → consider --review=prism)
-```
-
-### Crash recovery usage
-
-For actively resuming a dead session, `/ddaro:resume` is the higher-level entry point - it runs summary internally and produces a cd + paste block. Use `/ddaro:summary` directly when you only want a read-only recap without re-entering.
-
----
-
 ## /ddaro:resume
 
-Re-enter a ddaro worktree after a session ends, a crash, or a days-later return. Combines the existing-worktree scan from `/ddaro:start`, the recap from `/ddaro:summary`, and an auto-generated paste prompt, so one command covers the whole "where was I?" flow.
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
+
+Re-enter a ddaro worktree after a session ends, a crash, or a days-later return. Combines the existing-worktree scan from `/ddaro:start`, the recap (formerly `/ddaro:summary`, now `--recap-only`), and an auto-generated paste prompt, so one command covers the whole "where was I?" flow.
 
 ### Flow
 
@@ -1211,7 +1205,7 @@ Re-enter a ddaro worktree after a session ends, a crash, or a days-later return.
 
      Select (or 'all' for one-line recap of each):
    ```
-3. **On selection**: internally run `/ddaro:summary <name>`, then print a resume block combining the recap with cd + paste prompt:
+3. **On selection**: build the recap (git log <base>..HEAD, diff --stat, `.ddaro/context/*.md` "What was done", `CURRENT.md` Resume hint, git status), then print a resume block combining the recap with cd + paste prompt:
    ```
    ━━━ d-billing - resume plan ━━━━━━━━━━━━━━━━━━━━━━━
    Branch:        d-billing  (lock ✓)
@@ -1239,7 +1233,7 @@ Re-enter a ddaro worktree after a session ends, a crash, or a days-later return.
      Last state: 3 commits, 2 uncommit on src/services/statement.py.
      Next: finish TODO at line 156 → /ddaro:commit → /ddaro:merge.
 
-     Run /ddaro:summary first to confirm state, then continue.
+     Run /ddaro:status first to confirm state, then continue.
      ──────────────────────────────────────────────
    ```
 4. **`all` selection**: one-line recap per worktree; no paste prompts.
@@ -1256,7 +1250,7 @@ Re-enter a ddaro worktree after a session ends, a crash, or a days-later return.
 
 ### When to use what
 
-|  | `/ddaro:summary` | `/ddaro:resume` | `/ddaro:start` |
+|  | `/ddaro:resume --recap-only` | `/ddaro:resume` | `/ddaro:start` |
 |---|---|---|---|
 | Purpose | Read-only recap | Recap + re-entry plan | New work (with optional resume offer) |
 | Side effect | None | None | Creates worktree |
@@ -1266,6 +1260,9 @@ Re-enter a ddaro worktree after a session ends, a crash, or a days-later return.
 ---
 
 ## /ddaro:abandon <name>
+
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
 
 Destructive. Force-discards a ddaro-owned worktree even if its commits are unmerged. Reserved for "this work went wrong - drop everything" situations.
 
@@ -1313,50 +1310,17 @@ After success, cwd is still main - no stranded shell.
 
 ---
 
-## /ddaro:setting - Interactive menu
-
-```
-⚙ ddaro settings
-
-  1) Language                 [english]
-  2) Naming strategy          [d-number]
-  3) Name pool                [korea_city]
-  4) Max concurrent           [10]
-  5) Warn threshold           [5]
-  6) Stale days               [7]
-  7) Context persistence      [true]
-  8) Protected worktrees      [5 paths]
-  9) Main worktree            [<path>]
-  0) Done
-
-  Select:
-```
-
-Each selection opens a sub-menu. On change, write back to `<main>/.ddaro/config.json` immediately.
-
-### Sub-menus
-
-| # | Item | Sub options |
-|---|---|---|
-| 1 | Language | 1) english  2) korean |
-| 2 | Naming strategy | 1) d-number  2) d-pool  3) ddaro-number  4) ddaro-pool |
-| 3 | Name pool | 1) animal  2) korea_city  3) us_state  4) fruit  5) greek  6) custom |
-| 4 | Max concurrent | numeric 1-30 |
-| 5 | Warn threshold | numeric, ≤ max_concurrent |
-| 6 | Stale days | numeric 1-90 |
-| 7 | Context persistence | 1) true  2) false |
-| 8 | Protected worktrees | add path / remove / show |
-| 9 | Main worktree | auto-detected candidates + manual path |
-
----
-
 ## /ddaro:config [action] [value]
+
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
 
 Direct, script-friendly, one-line.
 
 | Command | Effect |
 |---|---|
-| `/ddaro:config` | Print full current config |
+| `/ddaro:config` | Interactive menu (language / naming / pool / limits / protected / main) |
+| `/ddaro:config show` | Print full current config (read-only; `base_branch` shows `(unset)` until ensure-schema runs) |
 | `/ddaro:config init` | Relaunch 5-step setup wizard |
 | `/ddaro:config main <path>` | Change main worktree |
 | `/ddaro:config protect <path>` | Add to protected list |
@@ -1365,7 +1329,9 @@ Direct, script-friendly, one-line.
 | `/ddaro:config naming <key>` | Change naming strategy |
 | `/ddaro:config pool <key>` | Change name pool |
 | `/ddaro:config language <en\|ko>` | Change language |
-| `/ddaro:config context <true\|false>` | Toggle context MD writes |
+| `/ddaro:config context <true\|false>` | Toggle context MD writes (master switch) |
+| `/ddaro:config base_branch <name>` | *(new in 0.8.0)* Set the merge-target branch via `config_tool.py set` (warns if neither `refs/heads/<name>` nor `origin/<name>` exists, still writes) |
+| `/ddaro:config auto_snapshot <on\|off>` | *(new in 0.8.0)* Gate the automatic per-commit snapshot hook (`off` = snapshot only on /ddaro:commit) |
 | `/ddaro:config max <N>` | Change max concurrent |
 | `/ddaro:config main_protection <off\|warn\|strict>` | Set the main-worktree guard mode in `.ddaro/config.json` (the hook itself is plugin-native, 0.5.0) |
 | `/ddaro:config evidence_check <off\|warn\|strict>` | *(new in 0.4.0)* Set the Edit/Write evidence-token gate mode in `.ddaro/config.json` (plugin-native hook, 0.5.0) |
@@ -1375,14 +1341,7 @@ Direct, script-friendly, one-line.
 
 Other removals / fine edits: edit config file manually.
 
-### config vs setting
-
-|  | config | setting |
-|---|---|---|
-| UX | Single command line | Interactive menu |
-| Prerequisite | Know key + value | Pick numbers |
-| Speed | Fast | Guided |
-| Use case | Scripts, known values | Browse, uncertain |
+New keys (`base_branch`, `auto_snapshot`, `schema_version`) are written only through `config_tool.py` (`set` / `ensure-schema`); other keys keep the 0.7.0 direct-edit path until 0.8.1.
 
 ---
 
@@ -1436,10 +1395,14 @@ claude> [5/5] Name pool (only used for `-pool` strategies):
 user> 2
 
 claude> ✓ Config saved: <main>/.ddaro/config.json
+        [ddaro] config upgraded to schema 3 (base_branch=master, auto_snapshot=on, schema_version=3)
+        (base branch detected from origin/HEAD; if wrong: /ddaro:config base_branch <name>)
         Proceeding with /ddaro:start...
 ```
 
 If `language=korean`, all subsequent output is in Korean.
+
+Right after the wizard saves the file, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main>` once and show its line (that is where `base_branch` and `auto_snapshot` come from - the wizard itself never asks for them and never writes them).
 
 ---
 
@@ -1469,11 +1432,14 @@ implement -> review" cadence that maps to one ddaro session.
 
 ## /ddaro:go [stage]
 
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
+
 The conductor: read the worktree's lifecycle stage and run the next step automatically, so
 the operator types ONE thing instead of recalling spec vs review vs check.
 
 - **Precondition (reuse `/ddaro status` cwd detection):** must be inside a ddaro worktree
-  (`.git/ddaro-owned` / `.ddaro/OWNED` / LOCK with `adopted=true`). In `config.main_worktree`
+  (`.ddaro/OWNED`; LOCK `adopted=true` for adopted). In `config.main_worktree`
   -> print "you're in main; cd into the worktree first" + the candidate path(s) from
   `/ddaro:list`. Not under ddaro -> suggest `/ddaro:start <name>` or `/ddaro:adopt <path>`.
   Never run a stage from main.
@@ -1490,18 +1456,18 @@ the operator types ONE thing instead of recalling spec vs review vs check.
   3. Doc reviewed but the branch added NO implementation beyond docs -> `implement` (human
      writes code; nothing to run yet).
   4. The branch added real implementation -> `check`. Compute the branch's OWN changes as the
-     merge-base diff `git diff --name-only origin/main...HEAD` (THREE dots) plus any
+     merge-base diff `git diff --name-only origin/<base>...HEAD` (THREE dots) plus any
      uncommitted working-tree edits, then EXCLUDE doc/planning paths (`docs/**`, `*.md`,
      `.planning/**`, `.ddaro/**`). Non-empty after exclusion -> `check`; only the doc left ->
-     stay `implement`. Do NOT use a plain two-dot `git diff origin/main` (tip vs tip): a
-     branch merely BEHIND origin/main shows origin's newer files as "changes" and would
+     stay `implement`. Do NOT use a plain two-dot `git diff origin/<base>` (tip vs tip): a
+     branch merely BEHIND origin/<base> shows origin's newer files as "changes" and would
      falsely infer `check` on a stale branch that has no real work of its own.
   5. A check already PASSED (recorded stage `done`, or a review-findings section + a clean
      prior `/ddaro:check`) -> `done` -> hand off to `/ddaro:commit` + `/ddaro:merge`.
   Show the operator the detected stage and the evidence ("doc has '## 14. Review findings' +
-  no non-doc files in origin/main...HEAD -> stage=implement") so a wrong inference is visible
+  no non-doc files in origin/<base>...HEAD -> stage=implement") so a wrong inference is visible
   and correctable. If the LOCK branch and the checked-out branch disagree, or the branch is
-  far behind origin/main, SAY SO - inference is least reliable there, so prefer asking the
+  far behind origin/<base>, SAY SO - inference is least reliable there, so prefer asking the
   operator over guessing the stage.
 - **Forced stage:** if `$1` is `spec` / `review` / `check`, run THAT stage's section
   directly (manual override / re-run), skipping detection. Anything else after auto-detect
@@ -1535,6 +1501,9 @@ defaulting a `[DECIDE]`; advancing past a BLOCK.
 
 ## /ddaro:spec <name>
 
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
+
 Scaffold a design/PRD doc and capture locked decisions BEFORE any code is written.
 
 - Parse `$ARGUMENTS` as `<name> [target-path]`. Target = `$2` or `docs/design/<name>.md`.
@@ -1557,6 +1526,9 @@ Anti-patterns: empty Reuse inventory; unresolved `[DECIDE]` silently defaulted; 
 section headers for parts the feature doesn't need (drop them).
 
 ## /ddaro:review <file>
+
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
 
 Dual-engine multi-angle review of a doc (or diff) + collate findings back in.
 
@@ -1589,10 +1561,13 @@ Dual-engine multi-angle review of a doc (or diff) + collate findings back in.
 
 ## /ddaro:check [branch]
 
+
+> **Step 0 (every subcommand)**: resolve `.ddaro/config.json` (walk up from cwd; in a linked worktree fall back to the main worktree via `.git` -> `commondir`). If none is found, `/ddaro:start` enters first-run setup and every other subcommand stops with "not a ddaro project, run /ddaro:start". If found, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd when in main, else `.ddaro/LOCK.main_worktree`, else `config.main_worktree`) and show its one-line output if any. This is the 0.7 -> 0.8 upgrade path; it is idempotent and silent when nothing changes.
+
 Pre-merge review-list gate on the implemented diff. Reports BLOCK/PASS; does not fix.
 
-- Resolve the diff: `$1` branch vs `origin/main`; or `--staged`; else this worktree's
-  `d-<name>` branch vs `origin/main` (read the branch from the lock file).
+- Resolve the diff: `$1` branch vs `origin/<base>`; or `--staged`; else this worktree's
+  `d-<name>` branch vs `origin/<base>` (read the branch from the lock file).
 - **prism-all on the diff** (correctness, security, regressions, concurrency, data
   integrity). Adversarially verify each HIGH+ before reporting (spawn skeptics prompted to
   refute; keep only survivors).
@@ -1617,7 +1592,7 @@ What this plugin protects against:
 - ✓ Pre-merge conflicts (dry-run before merge)
 - ✓ Work loss on crash (every commit → push + context MD)
 - ✓ Unreviewed merges (size-based auto review)
-- ✓ Context loss across sessions / IDE restarts (context MDs + `/ddaro:summary`)
+- ✓ Context loss across sessions / IDE restarts (context MDs + `/ddaro:resume`)
 
 What this plugin cannot protect against:
 - ✗ User manually force-checking out the same branch in two worktrees (`git worktree add --force`)
@@ -1632,7 +1607,7 @@ What this plugin cannot protect against:
 - `<main>/.ddaro/config.json` - per-project settings (language, protect, naming, pool)
 - `<worktree>/.ddaro/OWNED` - empty flag file; presence proves ddaro created the worktree
 - `<worktree>/.ddaro/LOCK` - branch/topic/created_at/language JSON
-- `<worktree>/.ddaro/context/*.md` - per-commit snapshots (crash recovery)
+- `<worktree>/.ddaro/context/*.md` - per-commit snapshots (crash recovery; written by `hooks/context_md.py`, automatically on every git commit since 0.8.0)
 - `<worktree>/.ddaro/CURRENT.md` - running state, overwritten each commit
 - `<worktree>/.ddaro/lifecycle.json` - conductor stage (`/ddaro:go`); `{stage, doc, updated}`, inferred if absent
 - `<main_worktree>/.gitignore` - contains a `.ddaro/` line that keeps the directory out of git (added once by `/ddaro:start`)

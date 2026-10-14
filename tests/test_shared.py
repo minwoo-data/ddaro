@@ -164,3 +164,116 @@ def test_find_config_none_when_main_has_no_config(tmp_path):
 def test_find_config_none_for_plain_dir(tmp_path):
     # Not a worktree, no config anywhere -> None (no subprocess, no crash).
     assert _shared.find_ddaro_config(tmp_path) is None
+
+
+# --- 0.8.0 helpers: base_branch / snapshot_enabled / worktree_root ---
+
+@pytest.mark.parametrize(
+    "cfg, expected",
+    [
+        (None, "main"),
+        ({}, "main"),
+        ({"base_branch": ""}, "main"),
+        ({"base_branch": "  "}, "main"),
+        ({"base_branch": "master"}, "master"),
+        ({"base_branch": "trunk"}, "trunk"),
+    ],
+)
+def test_base_branch_default_and_override(cfg, expected):
+    assert _shared.base_branch(cfg) == expected
+
+
+@pytest.mark.parametrize(
+    "cfg, expected",
+    [
+        ({}, True),                                        # both absent -> on
+        ({"auto_snapshot": "on"}, True),
+        ({"auto_snapshot": "OFF"}, False),
+        ({"auto_snapshot": "off"}, False),
+        ({"context_persistence": False}, False),           # persistence wins
+        ({"context_persistence": False, "auto_snapshot": "on"}, False),
+        ({"context_persistence": True, "auto_snapshot": "off"}, False),
+        (None, True),
+    ],
+)
+def test_snapshot_enabled_truth_table(cfg, expected):
+    assert _shared.snapshot_enabled(cfg) is expected
+
+
+@pytest.mark.parametrize(
+    "cfg, expected",
+    [
+        ({}, True),
+        (None, True),
+        ({"auto_snapshot": "off"}, True),            # auto_snapshot does NOT gate persistence
+        ({"context_persistence": False}, False),
+        ({"context_persistence": True}, True),
+    ],
+)
+def test_persistence_enabled_ignores_auto_snapshot(cfg, expected):
+    assert _shared.persistence_enabled(cfg) is expected
+
+
+def test_worktree_root_from_root_and_subdir(tmp_path):
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    sub = root / "src" / "deep"
+    sub.mkdir(parents=True)
+    assert _shared.worktree_root(root) == root.resolve()
+    assert _shared.worktree_root(sub) == root.resolve()
+
+
+def test_worktree_root_linked_worktree_git_file(tmp_path):
+    wt = tmp_path / "repo-d-busan"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: ../repo/.git/worktrees/busan\n", encoding="utf-8")
+    (wt / "x").mkdir()
+    assert _shared.worktree_root(wt / "x") == wt.resolve()
+    # a not-yet-existing subpath still resolves to the enclosing worktree
+    assert _shared.worktree_root(wt / "nope") == wt.resolve()
+
+
+def test_worktree_root_non_git_returns_none(tmp_path):
+    plain = tmp_path / "plain" / "dir"
+    plain.mkdir(parents=True)
+    # tmp_path itself is not inside a git repo on CI runners; guard for devs
+    # whose temp dir happens to live under one.
+    result = _shared.worktree_root(plain)
+    assert result is None or not str(result).startswith(str(plain))
+
+
+
+# --- 0.8.0: shell-path translation + cd-following commit targets ---
+
+@pytest.mark.parametrize(
+    "raw, windows, expected",
+    [
+        ("/c/Users/x", True, "C:/Users/x"),
+        ("/C/Users/x", True, "C:/Users/x"),
+        ("/cygdrive/d/work", True, "D:/work"),
+        ("/c", True, "C:/"),
+        ("/c/Users/x", False, "/c/Users/x"),       # POSIX: untouched
+        ("/tmp/x", True, "/tmp/x"),                # not a drive path
+        ("/cache/x", True, "/cache/x"),            # one letter only
+        ("C:/Users/x", True, "C:/Users/x"),
+        ("relative/dir", True, "relative/dir"),
+    ],
+)
+def test_native_path(raw, windows, expected):
+    assert _shared.native_path(raw, windows=windows) == expected
+
+
+def test_follow_cd_off_by_default(tmp_path):
+    cmd = "cd sub && git commit -m x"
+    assert _shared.command_git_commit_targets(cmd, tmp_path) == [tmp_path]
+
+
+def test_follow_cd_resolves_relative_and_absolute(tmp_path):
+    other = (tmp_path / "abs").as_posix()
+    assert _shared.command_git_commit_targets("cd sub && git commit", tmp_path, follow_cd=True) == [tmp_path / "sub"]
+    assert _shared.command_git_commit_targets(f"cd {other}; git commit", tmp_path, follow_cd=True) == [Path(other)]
+    # cd applies cumulatively, and -C is relative to the cd'd directory
+    assert _shared.command_git_commit_targets("cd a && cd b && git -C c commit", tmp_path,
+                                              follow_cd=True) == [tmp_path / "a" / "b" / "c"]
+    # `cd -` is not followed
+    assert _shared.command_git_commit_targets("cd - && git commit", tmp_path, follow_cd=True) == [tmp_path]

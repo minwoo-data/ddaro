@@ -1,7 +1,7 @@
 ---
 name: ddaro:config
 description: "Config access. No args → interactive 9-item menu. With args → direct key set (for users who know the keys). Also sets the mode for the plugin-native protective hooks (main_protection / branch_naming / cross_worktree_check / branch_worktree_match / evidence_check) and runs `migrate` to clean up legacy settings.json hook entries."
-argument-hint: "[menu (default) | show | init | migrate | main <path> | protect <path> | unprotect <path> | external <pattern> | naming <key> | pool <key> | language <en|ko> | context <true|false> | max <N> | main_protection <off|warn|strict> | branch_naming <off|warn|strict> | cross_worktree_check <on|off> | branch_worktree_match <off|warn|strict> | evidence_check <off|warn|strict>]"
+argument-hint: "[menu (default) | show | init | migrate | base_branch <name> | auto_snapshot <on|off> | main <path> | protect <path> | unprotect <path> | external <pattern> | naming <key> | pool <key> | language <en|ko> | context <true|false> | max <N> | main_protection <off|warn|strict> | branch_naming <off|warn|strict> | cross_worktree_check <on|off> | branch_worktree_match <off|warn|strict> | evidence_check <off|warn|strict>]"
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep]
 ---
 
@@ -10,7 +10,10 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` sections "## /ddaro:config [a
 **Hooks are plugin-native (0.5.0).** The protective hooks are registered by the plugin in `hooks/hooks.json` and are active whenever ddaro is enabled. The `main_protection` / `branch_naming` / `cross_worktree_check` / `branch_worktree_match` / `evidence_check` actions below only write the chosen **mode** into `<main>/.ddaro/config.json` - they never touch `.claude/settings.json`. The hook reads that mode at runtime and no-ops (fail-open) when it is `off` / absent.
 
 - **No args → interactive menu**: numbered 9-item menu with current values in brackets (language / naming_strategy / name_pool / max_concurrent / warn_threshold / stale_days / context_persistence / protected_worktrees / main_worktree). Pick a number → sub-menu → save → return. `0` or Enter → exit. Persist to `<main_worktree>/.ddaro/config.json` immediately (no restart).
-- `show` → print full current config without menu.
+- Step 0: if config resolves, run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` first (show its line if any).
+- `show` → print full current config without menu (read-only; never writes).
+- `base_branch <name>` *(0.8.0)* → `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py set <main_worktree> base_branch <name>` (warns on stderr if neither `refs/heads/<name>` nor `origin/<name>` exists, still writes).
+- `auto_snapshot <on|off>` *(0.8.0)* → `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py set <main_worktree> auto_snapshot <on|off>`. Gates only the automatic per-commit snapshot hook.
 - `init` → relaunch initial setup wizard (5-step prompt).
 - `migrate` *(new in 0.5.0)* → remove redundant ddaro hook entries from `.claude/settings.json` that were installed by versions `<= 0.4.0`. Now that the hooks are plugin-native, those entries are leftover cruft. Procedure:
   - Locate the project's `.claude/settings.json` (resolve from `<main>` first, then cwd). If absent → "nothing to migrate".

@@ -17,10 +17,35 @@ from pathlib import Path
 from typing import Optional
 
 
+def read_stdin_text() -> str:
+    """All of stdin, decoded as UTF-8 regardless of the OS locale.
+
+    Claude Code sends hook payloads as raw UTF-8 JSON and Git Bash heredocs
+    are UTF-8 too, but Python's default pipe encoding on Windows is the ANSI
+    code page (cp1252 on a US-locale install) with surrogateescape: Korean
+    turns into mojibake plus lone surrogates that later crash a UTF-8 file
+    write. Decode the bytes ourselves (utf-8-sig also drops a PowerShell BOM).
+    """
+    buf = getattr(sys.stdin, "buffer", None)
+    if buf is None:
+        return sys.stdin.read()
+    return buf.read().decode("utf-8-sig", errors="replace")
+
+
+def utf8_stdio() -> None:
+    """Best effort: make print() emit UTF-8, which is what Claude Code decodes
+    hook / command output as. No-op where a stream cannot be reconfigured."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def read_payload() -> Optional[dict]:
     """Read a JSON payload from stdin. Return None on any error."""
     try:
-        raw = sys.stdin.read()
+        raw = read_stdin_text()
         if not raw:
             return None
         return json.loads(raw)
@@ -140,6 +165,56 @@ def bypass_active() -> bool:
     return v.strip() not in ("", "0", "false", "False")
 
 
+# --- 0.8.0: base branch / snapshot helpers ---------------------------------
+
+DEFAULT_BASE_BRANCH = "main"
+
+
+def base_branch(cfg: Optional[dict]) -> str:
+    """The merge-target branch (`config.base_branch`), default `main`.
+
+    Hooks read ONLY this cached value - detection lives in config_tool.py
+    (a subprocess-driven CLI the slash commands run), so the blocking
+    PreToolUse path never shells out."""
+    try:
+        v = str((cfg or {}).get("base_branch") or "").strip()
+    except Exception:
+        v = ""
+    return v or DEFAULT_BASE_BRANCH
+
+
+def persistence_enabled(cfg: Optional[dict]) -> bool:
+    """`context_persistence` master switch (absent == true). Gates every
+    context-MD write: hook, write, enrich, init."""
+    return (cfg or {}).get("context_persistence", True) is not False
+
+
+def snapshot_enabled(cfg: Optional[dict]) -> bool:
+    """HOOK-MODE gate only: persistence on AND `auto_snapshot` not `off`
+    (absent == on). `auto_snapshot: off` means 'do not snapshot every plain
+    git commit automatically' - /ddaro:commit (enrich/write) still writes."""
+    if not persistence_enabled(cfg):
+        return False
+    return str((cfg or {}).get("auto_snapshot", "on")).strip().lower() != "off"
+
+
+def worktree_root(path: Path) -> Optional[Path]:
+    """Walk up from `path` to the first directory that contains `.git`
+    (a directory for the main worktree, a FILE for a linked worktree).
+    Returns None when no git boundary is found or on any error."""
+    try:
+        p = Path(path).resolve()
+    except Exception:
+        return None
+    for candidate in [p, *p.parents]:
+        try:
+            if (candidate / ".git").exists():
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
 # --- git commit detection -------------------------------------------------
 #
 # Shared by check-main-bash.py (main_protection) and
@@ -176,9 +251,30 @@ def _tokenize(segment: str) -> list:
         return segment.split()
 
 
+_MSYS_DRIVE_RE = re.compile(r"^/(?:cygdrive/)?([a-zA-Z])(?=/|$)")
+
+
+def native_path(raw: str, windows: Optional[bool] = None) -> str:
+    """Translate a shell path to one Python can open.
+
+    Claude Code's Bash tool on Windows is Git Bash, so commands routinely carry
+    MSYS drive paths (`/c/Users/x`) or Cygwin ones (`/cygdrive/c/x`); Python on
+    Windows reads `/c/Users/x` as `C:\\c\\Users\\x`. Also expands a leading `~`.
+    `windows` defaults to the running OS (parameter exists for tests)."""
+    if windows is None:
+        windows = os.name == "nt"
+    if raw.startswith("~"):
+        raw = os.path.expanduser(raw)
+    if windows:
+        m = _MSYS_DRIVE_RE.match(raw)
+        if m:
+            raw = f"{m.group(1).upper()}:" + (raw[m.end():] or "/")
+    return raw
+
+
 def _join_dir(cwd: Path, raw: str) -> Path:
     try:
-        p = Path(raw)
+        p = Path(native_path(raw))
         return p if p.is_absolute() else (cwd / p)
     except Exception:
         return cwd
@@ -211,19 +307,31 @@ def _scan_git_invocation(tokens: list, start: int, cwd: Path):
     return target, None
 
 
-def command_git_commit_targets(command: str, cwd: Path) -> list:
+def command_git_commit_targets(command: str, cwd: Path, follow_cd: bool = False) -> list:
     """Worktree dirs a `git commit` in `command` would land in.
 
     One Path per `git [global-opts] commit ...` invocation (the effective
     target dir after -C / --work-tree, defaulting to cwd). `git commit-graph`,
-    `git log --grep=commit`, and `git merge` do NOT match. Never raises."""
+    `git log --grep=commit`, and `git merge` do NOT match. Never raises.
+
+    `follow_cd=True` (0.8.0, used by the snapshot hook only) also tracks
+    `cd <dir>` / `pushd <dir>` segments, so in `cd ../wt && git commit` the
+    commit resolves to `../wt` relative to `cwd`. Default False keeps the
+    protective hooks' behaviour unchanged."""
     targets = []
     try:
+        here = cwd
         for seg in _split_segments(command):
             toks = _tokenize(seg)
+            if follow_cd and toks:
+                head = toks[0].lstrip("(")
+                if head in ("cd", "pushd") and len(toks) > 1 and not toks[1].startswith("-"):
+                    here = _join_dir(here, toks[1])
+                    continue
+            base = here if follow_cd else cwd
             for i, tok in enumerate(toks):
                 if tok == "git" or tok.endswith("/git"):
-                    target, sub = _scan_git_invocation(toks, i + 1, cwd)
+                    target, sub = _scan_git_invocation(toks, i + 1, base)
                     if sub == "commit":
                         targets.append(target)
     except Exception:

@@ -1,13 +1,13 @@
 ---
 name: ddaro:check
 description: "Pre-merge review-list gate on the implementation diff: fire prism-all on the changes (bugs/security/regressions) + run the project ship checklist (tests, route-map drift, CHANGELOG sync, schema-additive, project rules), then BLOCK or PASS. On PASS, hand off to /ddaro:commit + /ddaro:merge. Back half of the dev cycle."
-argument-hint: "[branch|--staged] - default: this worktree's branch vs main"
+argument-hint: "[branch|--staged] - default: this worktree's branch vs <base>"
 allowed-tools: [Agent, Bash, Read, Glob, Grep]
 ---
 
 Read `${CLAUDE_PLUGIN_ROOT}/skills/ddaro/SKILL.md` section "## /ddaro:check [branch]" and execute with `$ARGUMENTS`.
 
-- Resolve the diff: `$1` branch vs main, or `--staged`, else current `d-<name>` branch vs `origin/main`.
+- Resolve the diff: `$1` branch vs <base>, or `--staged`, else current `d-<name>` branch vs `origin/<base>`.
 - Fire prism-all on the diff (focus: correctness, security, regressions, concurrency, data integrity). Adversarially verify each HIGH+ before reporting.
 - Run the SHIP CHECKLIST, discovering project rules from `.claude/CLAUDE.md` + `.claude/rules/`:
   - tests pass (run the project test command);

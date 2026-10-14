@@ -120,6 +120,8 @@ Also callable as `/ddaro <subcommand>`.
 ## Features
 
 - **Physical isolation** - each task gets its own git worktree in its own folder. Parallel Claude sessions cannot collide.
+- **Any base branch** *(0.8.0)* - `main`, `master`, `develop`: detected once (`config.base_branch`), used everywhere. Fix a wrong guess with `/ddaro:config base_branch <name>`.
+- **Snapshots on every commit** *(0.8.0)* - a PostToolUse hook writes `.ddaro/context/<ts>-<sha7>.md` after any `git commit` in a ddaro worktree, not just after `/ddaro:commit`. `/ddaro:commit` enriches the same file with a written summary.
 - **Deletion-aware commits** - classifies diff deletions (replace / format / pure / function-level / >100 lines) and prompts only when destructive.
 - **Size-based merge handling** - small / medium / large diffs each get progressively stricter deletion scans. Cross-plugin review (`--review=prism` for code, `--review=triad` for changed docs) is opt-in only and requires the named plugin to be installed. ddaro never calls another plugin automatically.
 - **Crash-recoverable context** - every commit writes `.ddaro/context/<sha>.md` and refreshes `CURRENT.md`. After a session or IDE crash, `/ddaro:resume` (or `/ddaro:resume --recap-only` for read-only) rebuilds the full picture.
