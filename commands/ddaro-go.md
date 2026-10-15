@@ -22,6 +22,6 @@ Conductor only: it picks the stage, gates cost, and records state; it never touc
    4. that set is non-empty -> `check`
    5. stage `done` recorded -> hand off to `/ddaro:commit` + `/ddaro:merge`
    LOCK/branch mismatch or far behind `origin/<base>`: say so and ask instead of guessing.
-3. Before `review` (8 agents) or `check` (prism-all + checklist) state the cost and get a yes; offer to jump to another stage. `spec` still asks its `[DECIDE]` items.
+3. Before `review` (7 discovery agents + prism's idea pass: 1 proposer + checker calls) or `check` (prism-all + checklist) state the cost and get a yes; offer to jump to another stage. `spec` still asks its `[DECIDE]` items.
 4. Run the stage by following `${CLAUDE_PLUGIN_ROOT}/commands/ddaro-<stage>.md` (do not re-implement it).
 5. Write `.ddaro/lifecycle.json` with the next stage (spec->review, review->implement, check PASS->done, check BLOCK->check) and today's date from session context, then say what `/ddaro:go` will do next. Never advance past a BLOCK.
