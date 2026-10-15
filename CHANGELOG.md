@@ -13,6 +13,7 @@ Follow prism 0.5.0 (Improvement lens retired, idea pass).
 ### Changed
 - `/ddaro:review <doc>` fans out 7 agents, not 8: prism's design lens set is now 4 angles (conflict & reuse, claim accuracy, devil's advocate, robustness 4-axis) + triad's 3 lenses. prism's Improvement lens is retired.
 - `/ddaro:review` notes that prism (>= 0.5.0) runs its idea pass after its Evidence pass: grounded alternatives (class / route / subtract) checked by an independent checker, listed separately from findings and never a review blocker. The inline fallback for a prism that refuses docs now runs 4 angles.
+- `/ddaro:review --diff` notes the same idea pass after prism's 5 defect lenses and Evidence pass, listed separately and never a blocker.
 - `/ddaro:go` cost note before `review`: 7 discovery agents + prism's idea pass (1 proposer + checker calls).
 
 ## [0.9.1] - 2026-10-14
