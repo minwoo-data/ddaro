@@ -53,5 +53,5 @@ Fields:
    8. `cross_worktree_check` [on] / off - SessionStart drift report, silent when clean
    9. `branch_worktree_match` [strict] / off - blocks a commit when the folder's marker and the branch's differ (bypass `ALLOW_WORKTREE_BRANCH_MISMATCH=1`)
    Hooks are plugin-native: writing the mode is all that is needed; never edit `.claude/settings.json`.
-3. Write `schema_version: 2` with the wizard keys only, then run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main>` and show its line (it records `base_branch` and `auto_snapshot`), adding "if the base branch is wrong: /ddaro:config base_branch <name>".
+3. Write `schema_version: 2` with the wizard keys only, then run `python "${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py" ensure-schema <main>` and show its line (it records `base_branch` and `auto_snapshot`), adding "if the base branch is wrong: /ddaro:config base_branch <name>".
 4. If cwd is main, continue with /ddaro:start; otherwise stop after the cd instructions.

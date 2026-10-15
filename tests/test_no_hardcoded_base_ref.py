@@ -74,7 +74,7 @@ def test_no_hardcoded_base_ref(path):
 
 def test_every_subcommand_file_runs_ensure_schema():
     subs = [p for p in sorted((ROOT / "commands").glob("ddaro-*.md"))]
-    missing = [p.name for p in subs if "config_tool.py ensure-schema" not in p.read_text(encoding="utf-8")]
+    missing = [p.name for p in subs if 'config_tool.py" ensure-schema' not in p.read_text(encoding="utf-8")]
     assert not missing, "command files without ensure-schema: " + ", ".join(missing)
 
 

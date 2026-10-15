@@ -55,7 +55,7 @@ def test_step0_identical_everywhere():
     assert not missing, f"no Step 0 block: {missing}"
     texts = {m.group(1) for m in blocks.values()}
     assert len(texts) == 1, "Step 0 drifted between command files"
-    assert "config_tool.py ensure-schema" in texts.pop()
+    assert 'config_tool.py" ensure-schema' in texts.pop()
 
 
 @pytest.mark.parametrize("path", COMMANDS + REFS, ids=lambda p: p.name)

@@ -10,7 +10,7 @@
       "name": "ddaro",
       "source": "./",
       "description": "Worktree-per-session git workflow for parallel Claude Code sessions: isolated worktree + branch per session, deletion-aware commits with automatic context snapshots, PR merges driven through CI, crash recovery, protective hooks (main protection, branch naming). Per-command instruction files keep token use low.",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "homepage": "https://github.com/minwoo-data/ddaro",
       "license": "MIT",
       "author": {
