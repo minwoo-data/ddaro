@@ -1,6 +1,6 @@
 {
   "name": "ddaro",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Worktree-per-session git workflow for parallel Claude Code sessions: isolated worktree + branch per session, deletion-aware commits with automatic context snapshots, PR merges driven through CI, crash recovery, protective hooks (main protection, branch naming). Per-command instruction files keep token use low.",
   "author": {
     "name": "haroom",
