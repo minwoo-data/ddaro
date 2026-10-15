@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-14
+
+### Fixed
+- Every shell command that runs a plugin file now quotes `${CLAUDE_PLUGIN_ROOT}/<path>`: the 8 hook commands in `hooks/hooks.json` (the 8 `claude plugin validate` warnings) and the 19 `python ${CLAUDE_PLUGIN_ROOT}/...` lines in `commands/*.md` and `reference/config.md`. Unquoted, a plugin path with a space split into several words, and under bash a Windows path lost its backslashes.
+- `tests/test_plugin_root_quoted.py` fails on any unquoted `${CLAUDE_PLUGIN_ROOT}` after `python`/`bash`/`sh`/`node` in hooks.json, commands or reference files.
+- The Step 0 checks in `test_command_files.py` and `test_no_hardcoded_base_ref.py` now expect the quoted form (`config_tool.py" ensure-schema`).
+
+
 ## [0.9.0] - 2026-10-13
 
 Token diet. ddaro was the most expensive plugin in the family: every session paid for 15 long command descriptions, and every command told the model to read the 92k-character `skills/ddaro/SKILL.md` (about 25-30k tokens) that then stayed in context for the rest of the session.

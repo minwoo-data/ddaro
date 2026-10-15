@@ -9,7 +9,7 @@ disable-model-invocation: true
 # /ddaro:start
 
 <!-- step0 -->
-**Step 0.** Find `.ddaro/config.json` in cwd or a parent; in a linked worktree with none, use the main worktree's (`git rev-parse --path-format=absolute --git-common-dir`, then its parent). None found: say "not a ddaro project - run /ddaro:start" and stop (`/ddaro:start` runs first-time setup instead). Then run `python ${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py ensure-schema <main_worktree>` once (`<main_worktree>` = cwd if in main, else `.ddaro/LOCK` `main_worktree`, else `config.main_worktree`) and show its line if it prints one. Terms: "main worktree" = the folder `config.main_worktree` (receives merges only); `<base>` = `config.base_branch` (default `main`), `origin/<base>` its remote-tracking ref; never hardcode a branch name. Reply in `config.language`. If a ddaro script exits non-zero or python is missing, print `[ddaro] <script> <subcommand> failed (exit N): <first stderr line>` and continue; never hand-write `.ddaro/context/*`, `CURRENT.md`, or the config keys `base_branch` / `auto_snapshot` / `schema_version`.
+**Step 0.** Find `.ddaro/config.json` in cwd or a parent; in a linked worktree with none, use the main worktree's (`git rev-parse --path-format=absolute --git-common-dir`, then its parent). None found: say "not a ddaro project - run /ddaro:start" and stop (`/ddaro:start` runs first-time setup instead). Then run `python "${CLAUDE_PLUGIN_ROOT}/hooks/config_tool.py" ensure-schema <main_worktree>` once (`<main_worktree>` = cwd if in main, else `.ddaro/LOCK` `main_worktree`, else `config.main_worktree`) and show its line if it prints one. Terms: "main worktree" = the folder `config.main_worktree` (receives merges only); `<base>` = `config.base_branch` (default `main`), `origin/<base>` its remote-tracking ref; never hardcode a branch name. Reply in `config.language`. If a ddaro script exits non-zero or python is missing, print `[ddaro] <script> <subcommand> failed (exit N): <first stderr line>` and continue; never hand-write `.ddaro/context/*`, `CURRENT.md`, or the config keys `base_branch` / `auto_snapshot` / `schema_version`.
 <!-- /step0 -->
 
 Run from the main worktree. With a config and cwd != `config.main_worktree`, refuse and print `cd <main_worktree>` + `/ddaro:start`. With no config, run "First-time setup" in `${CLAUDE_PLUGIN_ROOT}/reference/config.md` first.
@@ -23,7 +23,7 @@ Run from the main worktree. With a config and cwd != `config.main_worktree`, ref
 ```bash
 git -C <main_worktree> worktree add <main_worktree>/../<project>-d-<name> -b d-<name> <base>
 ```
-7. **Plant**: `mkdir -p <wt>/.ddaro/context`, `touch <wt>/.ddaro/OWNED`, write `<wt>/.ddaro/LOCK` = `{"branch", "topic", "created_at", "main_worktree", "language"}`, append `.ddaro/` to `<main_worktree>/.gitignore` if that line is missing, then `python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py init <wt> --topic "<topic>"`.
+7. **Plant**: `mkdir -p <wt>/.ddaro/context`, `touch <wt>/.ddaro/OWNED`, write `<wt>/.ddaro/LOCK` = `{"branch", "topic", "created_at", "main_worktree", "language"}`, append `.ddaro/` to `<main_worktree>/.gitignore` if that line is missing, then `python "${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py" init <wt> --topic "<topic>"`.
 8. **Report**:
 ```
 ✓ Worktree created: <path>

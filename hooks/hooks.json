@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-main-edit.py"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/check-main-edit.py\""
           }
         ]
       },
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-evidence.py"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/check-evidence.py\""
           }
         ]
       },
@@ -25,15 +25,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-main-bash.py"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/check-main-bash.py\""
           },
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-branch-naming.py"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/check-branch-naming.py\""
           },
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/check-worktree-branch-match.py"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/check-worktree-branch-match.py\""
           }
         ]
       }
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py hook"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/context_md.py\" hook"
           }
         ]
       }
@@ -55,11 +55,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/session-start-notice.py"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-notice.py\""
           },
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/cross-worktree-health.py"
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/cross-worktree-health.py\""
           }
         ]
       }
