@@ -15,6 +15,6 @@ disable-model-invocation: true
 A gate, not a fixer.
 
 1. Diff: `$1` vs `origin/<base>`, or `--staged`, else this worktree's `LOCK.branch` vs `origin/<base>`.
-2. prism-all on the diff (correctness, security, regressions, concurrency, data integrity); verify every HIGH+ adversarially (skeptic agents try to refute; keep survivors).
+2. prism-all on the diff with `--no-ideas` (a gate wants defects only; prism >= 0.5.0 would otherwise add its idea pass) (correctness, security, regressions, concurrency, data integrity); verify every HIGH+ adversarially (skeptic agents try to refute; keep survivors).
 3. Ship checklist from `.claude/CLAUDE.md` + `.claude/rules/`, each rule that applies: tests pass (run them), route-map drift if routes changed, CHANGELOG updated (and its mirror if declared), schema change additive or flagged, no synthetic accounts / secrets / hardcoded config / em-dash where the rules ban them, docs-vs-code drift on touched specs.
 4. Verdict BLOCK (every blocker + its one fix) or PASS. PASS -> "/ddaro:commit then /ddaro:merge". Never proceed past a BLOCK.

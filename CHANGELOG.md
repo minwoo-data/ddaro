@@ -15,6 +15,7 @@ Follow prism 0.5.0 (Improvement lens retired, idea pass).
 - `/ddaro:review` notes that prism (>= 0.5.0) runs its idea pass after its Evidence pass: grounded alternatives (class / route / subtract) checked by an independent checker, listed separately from findings and never a review blocker. The inline fallback for a prism that refuses docs now runs 4 angles.
 - `/ddaro:review --diff` notes the same idea pass after prism's 5 defect lenses and Evidence pass, listed separately and never a blocker.
 - `/ddaro:go` cost note before `review`: 7 discovery agents + prism's idea pass (1 proposer + checker calls).
+- `/ddaro:check` runs prism-all with `--no-ideas`: the gate judges defects only, so it skips prism's idea pass.
 
 ## [0.9.1] - 2026-10-14
 
