@@ -115,11 +115,11 @@ def test_ensure_schema_fills_missing_keys_and_bumps(tmp_path):
     _write_cfg(root)
     r = _cli("ensure-schema", root.as_posix())
     assert r.returncode == 0
-    assert "schema 3" in r.stdout
+    assert "schema 4" in r.stdout
     cfg = _read_cfg(root)
     assert cfg["base_branch"] == "master"
     assert cfg["auto_snapshot"] == "on"
-    assert cfg["schema_version"] == 3
+    assert cfg["schema_version"] == 4
     assert cfg["main_worktree"] == root.as_posix()  # untouched
 
 
