@@ -61,11 +61,14 @@ import sys
 # --- fast path (stdlib only) ------------------------------------------------
 
 _WORD = r"(?<![A-Za-z0-9_\-])(?:{})(?![A-Za-z0-9_])"
-FAST_RE = re.compile(_WORD.format(r"git(?:\.exe)?|git-[a-z-]+(?:\.exe)?|gh(?:\.exe)?|gate\.py|config_tool\.py|\.ddaro|ddaro-gate"), re.I)
+FAST_RE = re.compile(_WORD.format(r"git(?:\.exe)?|git-[a-z-]+(?:\.exe)?|gh(?:\.exe)?|gate\.py|config_tool\.py|\.ddaro|ddaro-gate|\.gitconfig|config\.yml"), re.I)
 RAW_GH_RE = re.compile(r"\bgh(\.exe)?\b.*\b(pr\s+merge|api)\b", re.S | re.I)
 RAW_PUSH_RE = re.compile(r"\bgit(\.exe)?\b.*\b(push|send-pack)\b", re.S | re.I)
 RAW_SCRIPT_RE = re.compile(r"gate\.py|config_tool\.py|\.ddaro[/\\]|ddaro-gate", re.I)
 _CD_SPLIT = re.compile(r"&&|\|\||;|&|\||\n|`")
+GLOB_RE = re.compile(r"[*?\[{]")
+WRITE_SHAPE_RE = re.compile(r">|\b(tee|cp|mv|rm|rmdir|install|dd|rsync|truncate|shred|unlink)\b|\bsed\b.*\s-i|\bperl\b.*\s-\w*i", re.S)
+ENV_ALIAS_RE = re.compile(r"^(GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_\d+|GIT_CONFIG_VALUE_\d+|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG_NOSYSTEM|HOME|XDG_CONFIG_HOME|GH_CONFIG_DIR|GIT_EXEC_PATH|GIT_DIR|GIT_COMMON_DIR)=")
 
 
 def _read_payload():
@@ -87,7 +90,12 @@ def _fast_reject(payload) -> bool:
     ti = payload.get("tool_input") or {}
     if tool == "Bash":
         cmd = ti.get("command")
-        return not (isinstance(cmd, str) and FAST_RE.search(cmd))
+        if not isinstance(cmd, str):
+            return True
+        if FAST_RE.search(cmd):
+            return False
+        # a glob in a write command may expand to a protected path (`.ddar[o]/gates/x`)
+        return not (GLOB_RE.search(cmd) and WRITE_SHAPE_RE.search(cmd))
     if tool in ("Edit", "Write", "NotebookEdit"):
         p = str(ti.get("file_path") or ti.get("notebook_path") or "").replace("\\", "/").lower()
         return ".ddaro" not in p and not p.endswith(("/ddaro-gate", "/.git/config", "/.gitconfig", "/config.yml", "/git/config"))
@@ -179,8 +187,12 @@ def _context_dirs(payload) -> list:
         return dirs
     cmd = str(ti.get("command") or "")
     here = cwd
+    import shlex
     for seg in _CD_SPLIT.split(cmd):
-        toks = seg.strip().split()
+        try:
+            toks = shlex.split(seg, posix=True)
+        except ValueError:
+            raise RuntimeError("unparseable segment")      # caller: no early exit, go to the slow path
         if not toks:
             continue
         head = toks[0].lstrip("({!")
@@ -202,10 +214,17 @@ def _context_dirs(payload) -> list:
                 dirs.append(tgt if os.path.isabs(tgt) else os.path.join(here, tgt))
             else:
                 val = t.split("=", 1)[1] if "=" in t else t      # `NAME=/path` assignments count too
+                m = re.match(r"^(\d*)(>>?|&>)(.+)$", val)
+                if m:
+                    val = m.group(3)
                 val = _native(val.strip("'\""))
                 if val.startswith("/") or re.match(r"^[A-Za-z]:/", val):
                     dirs.append(val)
                     dirs.append(os.path.dirname(val))
+                elif not val.startswith("-") and ("/" in val or "\\" in val or os.path.isdir(os.path.join(here, val))):
+                    joined = os.path.join(here, val.replace("\\", "/"))      # relative paths resolve against the segment cwd
+                    dirs.append(joined)
+                    dirs.append(os.path.dirname(joined))
     return dirs
 
 
@@ -433,6 +452,11 @@ class Guard:
         norm = self.norm_path(tp)
         main, st = self.main_of(tp.parent if tp.suffix or not tp.exists() else tp)
         if main is None:
+            if norm.endswith(("/.gitconfig", "/.config/git/config", "/config.yml")):
+                main = self.main_or_refuse(self.payload_cwd, f"{tool} {tp}")
+                if main is not None and norm in self.protected_paths(main):
+                    self.note(main, self.msg_protected(tp.name), "protected")
+                return
             if st == "git_failed":
                 self.main_or_refuse(tp.parent, f"{tool} {tp}")
             return
@@ -464,14 +488,18 @@ class Guard:
                     new_text = cur
             else:
                 new_text = ""
+            corrupt = False
             try:
-                old_cfg = json.loads(cur) if cur.strip() else {}
+                if not cur.strip():
+                    raise ValueError("empty")
+                old_cfg = json.loads(cur)
                 if not isinstance(old_cfg, dict):
                     raise ValueError("not a dict")
             except Exception:
                 # The current file does not parse, so the gate is strict right now (L9):
                 # the baseline for "weakening" is strict, not the defaults.
                 old_cfg = {"merge_gate": "strict"}
+                corrupt = True
             try:
                 new_cfg = json.loads(new_text)
             except Exception:
@@ -479,7 +507,7 @@ class Guard:
             if not isinstance(new_cfg, dict):
                 self.note(main, self.msg_weaken(["config.json would stop parsing"]), "weaken")
                 return
-            if old_cfg == {"merge_gate": "strict"} and "base_branch" not in old_cfg:
+            if corrupt:
                 old_cfg["base_branch"] = new_cfg.get("base_branch")     # unknowable from a corrupt file
             weak = self.ct.weakening_changes(old_cfg, new_cfg)
             if weak:
@@ -500,14 +528,21 @@ class Guard:
             seg_cwd = seg["cwd"]
             stripped = [self.sh.strip_token(t) for t in toks]
             self.check_deadline()
+            env_prefix = [t for t in toks if ENV_ALIAS_RE.match(t)] + \
+                         [t for t in seg.get("exports", []) if ENV_ALIAS_RE.match(t)]
             for i, tok in enumerate(toks):
                 base = self.sh.strip_token(tok).replace("\\", "/").rsplit("/", 1)[-1].lower()
                 dashed = re.fullmatch(r"git-([a-z][a-z-]*)(\.exe)?", base)
+                if env_prefix and (self.sh.is_git_token(tok) or dashed or self.sh.is_gh_token(tok)):
+                    m, st = self.main_of(seg_cwd)
+                    if m is None:
+                        m = self.main_or_refuse(seg_cwd, tok)
+                    self.note(m, self.msg_human(f"git/gh with a config-redirecting environment ({env_prefix[0].split('=')[0]})"), "alias")
                 if self.sh.is_git_token(tok):
                     changed = self.git_invocation(toks, i, seg_cwd)
                     branch_changing_before = branch_changing_before or changed
-                elif dashed:
-                    # dashed-form binary `git-push ...` is `git push ...`
+                elif dashed and all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=|^env$|^exec$", self.sh.strip_token(x)) for x in toks[:i]):
+                    # dashed-form binary `git-push ...` in command position is `git push ...`
                     changed = self.git_invocation(["git", dashed.group(1)] + toks[i + 1:], 0, seg_cwd)
                     branch_changing_before = branch_changing_before or changed
                 elif self.sh.is_gh_token(tok):
@@ -524,6 +559,7 @@ class Guard:
         unknown and the previous one is kept."""
         out = []
         env = {}
+        exports = []
         here = self.Path(self.payload_cwd)
         for seg in self.sh._split_segments(cmd):
             toks = [self._subst(t, env) for t in self.sh._tokenize(seg)]
@@ -532,7 +568,8 @@ class Guard:
                 m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", body[0])
                 if m and (len(body) == 1 or body is not toks):
                     env[m.group(1)] = m.group(2)
-            out.append({"text": seg, "tokens": toks, "cwd": here})
+                    exports.append(body[0])
+            out.append({"text": seg, "tokens": toks, "cwd": here, "exports": list(exports)})
             if toks:
                 head = self.sh.strip_token(toks[0])
                 if head in ("cd", "pushd") and len(toks) > 1 and not toks[1].startswith("-"):
@@ -563,6 +600,9 @@ class Guard:
         for c in configs:
             if c.lower().startswith("alias."):
                 self.note(main, self.msg_human(f"git alias via -c ({c.split('=')[0]})"), "alias")
+        for t in toks[i + 1:idx if idx is not None else len(toks)]:
+            if t.lower().startswith("--config-env=alias.") or t.lower() == "--config-env":
+                self.note(main, self.msg_human("git --config-env alias.*"), "alias")
         if sub is None:
             return False
         rest = toks[idx + 1:]
@@ -570,7 +610,17 @@ class Guard:
             self.note(main, self.msg_human("git config alias.*"), "alias")
             return False
         if sub not in BUILTIN_GIT and main is not None and self.mode_for(main) != "off" and depth < 3:
-            expansion = self.sh.git_out(["config", "--get", f"alias.{sub}"], target, timeout=self.git_timeout())
+            gcfg = []
+            for c in configs:
+                gcfg += ["-c", c]
+            rc, out, _ = self.sh.run_cmd(["git", *gcfg, "config", "--get", f"alias.{sub}"], cwd=target, timeout=self.git_timeout())
+            expansion = out.strip() if rc == 0 else None
+            if rc is None or (rc not in (0, 1)):
+                self.note(main, self.msg_human(f"git `{sub}`: alias lookup failed"), "alias")
+                return True
+            if not expansion:
+                self.note(main, self.msg_human(f"git `{sub}` is not a builtin and no alias resolves it"), "alias")
+                return True
             if expansion:
                 if expansion.startswith("!"):
                     self.note(main, self.msg_human(f"git alias `{sub}` runs a shell command ({expansion[:40]})"), "alias")
@@ -590,9 +640,22 @@ class Guard:
                 if self.norm_path(target) == self.norm_path(main):
                     self.note(main, self.msg_protected(".ddaro (git clean -x/-X in <main>)"), "protected")
         if sub == "stash" and main is not None:
-            flags = [self.sh.strip_token(t) for t in rest if t.startswith("-")]
-            if any(f in ("-a", "--all", "-u", "--include-untracked") or
-                   (f.startswith("-") and not f.startswith("--") and ("a" in f or "u" in f)) for f in flags):
+            flags = []
+            skip = False
+            for t in rest:
+                if skip:
+                    skip = False
+                    continue
+                t = self.sh.strip_token(t)
+                if t in ("-m", "--message"):
+                    skip = True
+                    continue
+                if t.startswith("-"):
+                    flags.append(t)
+            all_f = any(f in ("-a", "--all") or (f.startswith("-") and not f.startswith("--") and "a" in f) for f in flags)
+            unt_f = any(f in ("-u", "--include-untracked") or (f.startswith("-") and not f.startswith("--") and "u" in f) for f in flags)
+            ignored = self.sh.run_cmd(["git", "check-ignore", "-q", ".ddaro"], cwd=target, timeout=self.git_timeout())[0] == 0
+            if all_f or (unt_f and not ignored):
                 if self.norm_path(target) == self.norm_path(main):
                     self.note(main, self.msg_protected(".ddaro (git stash --all/--include-untracked in <main>)"), "protected")
         return sub in BRANCH_CHANGING
@@ -743,6 +806,9 @@ class Guard:
             if expansion.startswith("!"):
                 self.note(main, self.msg_human(f"gh alias `{first}` runs a shell command"), "alias")
                 return
+            if not expansion:
+                self.note(main, self.msg_human(f"gh `{first}` is not a gh command and no alias resolves it"), "alias")
+                return
             if expansion:
                 try:
                     exp = self.sh._tokenize(expansion)
@@ -757,7 +823,18 @@ class Guard:
             self.gh_pr_merge(args[2:], main, branch_changing_before, seg_cwd)
 
     def gh_api(self, args: list, main):
-        positional = [a for a in args if not a.startswith("-")]
+        value_flags = {"-H", "--header", "-p", "--preview", "-q", "--jq", "-t", "--template", "--hostname", "--cache",
+                       "-X", "--method", "-f", "-F", "--field", "--raw-field", "--input"}
+        positional = []
+        k = 0
+        while k < len(args):
+            a = args[k]
+            if a in value_flags and k + 1 < len(args):
+                k += 2
+                continue
+            if not a.startswith("-"):
+                positional.append(a)
+            k += 1
         file_body = False
         values = []
         method = "GET"
@@ -794,15 +871,15 @@ class Guard:
                     continue
             elif a.startswith(("--field=", "--raw-field=")):
                 values.append(a.split("=", 1)[1])
-            elif re.match(r"^-[a-zA-Z]*[fF].", a) and not a.startswith("--"):
-                k = max(a.find("f"), a.find("F"))
+            elif re.match(r"^-[a-zA-Z]*?[fF].", a) and not a.startswith("--"):
+                k = re.match(r"^-[a-zA-Z]*?([fF])", a).start(1)
                 values.append(a[k + 1:])
             j += 1
         if any(v.split("=", 1)[-1].startswith("@") for v in values):
             file_body = True
-        if positional and positional[0] == "graphql":
+        if positional and positional[0] == "graphql" and method == "GET":
             inline = [v.split("=", 1)[1] for v in values if v.startswith("query=") and not v.split("=", 1)[1].startswith("@")]
-            if file_body or not inline or any(re.search(r"\bmutation\b", q) for q in inline):
+            if file_body or not inline or any(re.search(r"\bmutation\b|[$`]", q) for q in inline):
                 self.note(main, self.msg_human("gh api graphql with a mutation, or a body the gate cannot read"), "api")
             return
         has_field = bool(values) or file_body
@@ -1014,12 +1091,29 @@ class Guard:
 
     def protected_write(self, raw: str, seg_cwd):
         low = raw.replace("\\", "/").lower()
-        if ".ddaro" not in low and "ddaro-gate" not in low and not low.endswith(("/.git/config", "/.gitconfig", "/config.yml")):
+        has_glob = bool(re.search(r"[*?\[{]", raw))
+        if has_glob:
+            # judge every expansion (plus the literal) so `.ddar[o]/gates/x` or `ddaro-gat[e]` cannot hide
+            import glob as _glob
+            try:
+                pat = self.sh.native_path(raw)
+                if not self.Path(pat).is_absolute():
+                    pat = str(self.Path(seg_cwd) / pat)
+                matches = _glob.glob(pat, recursive=True)[:200]
+            except Exception:
+                matches = []
+            for m in matches:
+                self.protected_write_literal(m, seg_cwd, from_glob=True)
+            if not (".ddaro" in low or "ddaro-gate" in low or "/.git/" in low or matches):
+                return
+        elif ".ddaro" not in low and "ddaro-gate" not in low and not low.endswith(("/.git/config", "/.gitconfig", "/config.yml")):
             return
+        self.protected_write_literal(raw, seg_cwd, from_glob=False, has_glob=has_glob)
+
+    def protected_write_literal(self, raw: str, seg_cwd, from_glob: bool = False, has_glob: bool = False):
         p = self.Path(self.sh.native_path(raw))
         if not p.is_absolute():
             p = self.Path(seg_cwd) / p
-        has_glob = bool(re.search(r"[*?\[{]", str(p)))
         probe = p
         if has_glob:
             keep = []
@@ -1030,12 +1124,24 @@ class Guard:
             probe = self.Path("/".join(keep)) if keep else self.Path(seg_cwd)
         norm = self.norm_path(p)
         main, st = self.main_of(probe if probe.is_dir() else probe.parent)
+        if main is None and has_glob:
+            main, st = self.main_of(p.parent)
         if main is None:
+            tail_global = norm.endswith(("/.gitconfig", "/.config/git/config", "/config.yml"))
+            if tail_global:
+                main = self.main_or_refuse(self.payload_cwd, f"write to {raw}")
+                if main is not None and norm in self.protected_paths(main):
+                    self.note(main, self.msg_protected(p.name), "protected")
+                return
             if st == "git_failed":
                 self.main_or_refuse(probe, f"write to {raw}")
             return
         if norm in self.protected_paths(main):
             self.note(main, self.msg_protected(p.name), "protected")
+            return
+        common = self.sh.gate_marker_path(main)
+        if common is not None and (norm == self.norm_path(common.parent) or norm.startswith(self.norm_path(common.parent) + "/")):
+            self.note(main, self.msg_protected(f"{p.name} (inside the git common dir)"), "protected")
             return
         main_n = self.norm_path(main)
         if not norm.startswith(main_n + "/"):
@@ -1043,7 +1149,7 @@ class Guard:
                 self.note(main, self.msg_outside_config(p), "config_outside")
             return
         rel = norm[len(main_n) + 1:]
-        if rel.startswith(".ddaro") and has_glob:
+        if rel.startswith(".ddaro") and (has_glob or from_glob):
             self.note(main, self.msg_protected(f"{rel} (a glob under .ddaro)"), "protected")
             return
         if rel in (".ddaro", ".ddaro/config.json", ".ddaro/verify.json") or rel.startswith(".ddaro/gates") \
@@ -1129,7 +1235,7 @@ def main() -> int:
         if _any_gated(payload) == "off":
             return 0                              # no gated repository near this command: no subprocess, no imports
     except Exception:
-        pass
+        pass                                      # could not tell: the slow path decides
     try:
         from pathlib import Path
         sys.path.insert(0, str(Path(__file__).resolve().parent))

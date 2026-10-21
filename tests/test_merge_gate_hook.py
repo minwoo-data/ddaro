@@ -558,7 +558,7 @@ def test_more_protected_write_shapes_blocked(g, tmpl):
 
 def test_stash_all_in_main_blocked_and_marker_init_rules(g):
     assert bash(g, "git stash --all", cwd=g.main).returncode == BLOCK
-    assert bash(g, "git stash -u", cwd=g.main).returncode == BLOCK
+    assert bash(g, "git stash -u", cwd=g.main).returncode == ALLOW        # .ddaro is gitignored in the fixture
     assert bash(g, "git stash", cwd=g.main).returncode == ALLOW
     assert bash(g, "git stash --all", cwd=g.wt).returncode == ALLOW      # not <main>
     marker = Path(g.git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=g.main), "ddaro-gate")
@@ -645,3 +645,24 @@ def test_marker_write_tool_blocked(g):
     marker = Path(g.git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=g.main), "ddaro-gate")
     assert hook(g, "Write", file_path=marker.as_posix(), content="").returncode == BLOCK
     assert hook(g, "Edit", file_path=(g.main / ".git" / "config").as_posix(), old_string="a", new_string="[alias]").returncode == BLOCK
+
+
+def test_relative_paths_from_outside_cwd_still_gated(g):
+    rel = g.main.name
+    assert bash(g, f"echo '{{}}' > {rel}/.ddaro/gates/x.json", cwd=g.tmp).returncode == BLOCK
+    assert bash(g, f"python gate.py approve {rel} d-busan --head HEAD --reason x", cwd=g.tmp).returncode == BLOCK
+    assert bash(g, f"rm -rf {rel}/.ddar[o]", cwd=g.tmp).returncode == BLOCK
+    assert bash(g, f"rm {rel}/.git/ddaro-gat[e]", cwd=g.tmp).returncode == BLOCK
+
+
+def test_env_config_redirect_blocked(g):
+    for cmd in ("GIT_CONFIG_PARAMETERS=\"'alias.p=push origin HEAD:master'\" git p",
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p origin HEAD:master",
+                "git --config-env=alias.p=P p origin HEAD:master",
+                "GH_CONFIG_DIR=/tmp/ghc gh mg 89",
+                "git frobnicate"):
+        r = bash(g, cmd)
+        assert r.returncode == BLOCK, (cmd, r.stderr)
+    assert bash(g, "gh api -t graphql -X PUT repos/o/r/pulls/5/merge -f query='query{viewer{login}}'").returncode == BLOCK
+    assert bash(g, "echo x >> ~/.gitconfig").returncode == BLOCK
+    assert bash(g, "git stash -u", cwd=g.main).returncode == ALLOW        # .ddaro is ignored in the fixture

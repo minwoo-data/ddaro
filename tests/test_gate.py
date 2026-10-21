@@ -1166,3 +1166,9 @@ def test_make_run_tag_contract():
     tag, rand = gate.make_run_tag("Feat/Login page", "0" * 40, 3)
     assert isinstance(tag, str) and tag.endswith(f"-{rand}") and len(rand) == 6
     assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", tag)
+
+
+def test_is_doc_prefix_handling():
+    assert gate.is_doc(".planning/x.md", {}) and gate.is_doc("./.planning/x.md", {})
+    assert gate.is_doc(".claude/x.md", {"planning_patterns": ["**/*.md"]}) is False
+    assert gate.is_doc("docs/x.md", {"planning_patterns": ["**/*.md"]}) is True

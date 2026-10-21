@@ -436,7 +436,10 @@ def is_doc(path: str, cfg: Optional[dict]) -> bool:
     """A document: matches `planning_patterns`, has a document extension, and
     does not live under `.claude/`, `.github/` or `.ddaro/` (executable config
     for the agent or CI is never a document, whatever the patterns say)."""
-    p = path.replace("\\", "/").lstrip("./")
+    p = path.replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    p = p.lstrip("/")
     if Path(p).suffix.lower() not in DOC_EXTS:
         return False
     if p.startswith(NEVER_DOC_PREFIXES):
@@ -617,7 +620,11 @@ def confirm_merged(state: dict, main: Path, repo: Repo, branch: str, base: str, 
                 notes.append(f"PR #{num} merged but head {pr_head[:7]} not local (one fetch per check)")
                 continue
             fetched += 1
-            rc, _, err = repo.run(["fetch", "origin", f"pull/{num}/head"], timeout=FETCH_TIMEOUT)
+            try:
+                rc, _, err = repo.run(["fetch", "origin", f"pull/{num}/head"], timeout=FETCH_TIMEOUT)
+            except GitUnavailable as e:
+                notes.append(f"PR #{num} merged but fetch could not run ({e})")
+                continue
             if not repo.has_commit(pr_head):
                 tail = (err.strip().splitlines() or ["?"])[-1]
                 notes.append(f"PR #{num} merged but head {pr_head[:7]} not local after fetch (exit {rc}: {tail})")
@@ -1376,7 +1383,12 @@ def gate_snapshot(main: Path, branch: str) -> dict:
             snap[posix(p)] = "?"
     gd = gates_dir(main)
     try:
-        snap["__gates__"] = sorted(x.name for x in gd.iterdir()) if gd.is_dir() else []
+        for x in sorted(gd.rglob("*")) if gd.is_dir() else []:
+            if x.is_file() and x.suffix == ".json" and ".tmp" not in x.name:
+                try:
+                    snap["gates/" + x.relative_to(gd).as_posix()] = hashlib.sha256(x.read_bytes()).hexdigest()
+                except Exception:
+                    snap["gates/" + x.relative_to(gd).as_posix()] = "?"
     except Exception:
         snap["__gates__"] = "?"
     marker = None
@@ -1519,11 +1531,12 @@ def cmd_check_begin(wt: Path, full: bool) -> dict:
     verify = {"commands": cmds, "results": [], "note": note}
     failed = None
     snap_before = gate_snapshot(main, branch)
-    state_bytes = None
-    try:
-        state_bytes = state_path(main, branch).read_bytes()
-    except Exception:
-        pass
+    keep_bytes = {}
+    for kp in (state_path(main, branch), Path(main) / ".ddaro" / "verify.json", Path(main) / ".ddaro" / "config.json"):
+        try:
+            keep_bytes[kp] = kp.read_bytes()
+        except Exception:
+            pass
     if block_reason:
         failed = block_reason
     elif cmds:
@@ -1534,12 +1547,16 @@ def cmd_check_begin(wt: Path, full: bool) -> dict:
     out["verify"] = verify
     tampered = gate_snapshot_diff(snap_before, gate_snapshot(main, branch))
     if tampered:
-        if state_bytes is not None:
-            try:
-                with locked(main, branch):
-                    write_json_atomic(state_path(main, branch), json.loads(state_bytes.decode("utf-8")), keep_bak=False)
-            except Exception:
-                pass
+        try:
+            with locked(main, branch):
+                for kp, data in keep_bytes.items():
+                    try:
+                        if not kp.exists() or kp.read_bytes() != data:
+                            kp.write_bytes(data)      # put the pre-test bytes back
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         why = "테스트가 게이트 상태를 바꿈: " + ", ".join(Path(k).name if not k.startswith("__") else k.strip("_") for k in tampered[:5])
         _record_verify_run(main, branch, run_no, "REFUSED", verify, why)
         return refused(why, run=run_no, head=head, verify=verify, summary_extra=note_lines)
