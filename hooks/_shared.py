@@ -4,6 +4,12 @@ Philosophy: fail open on any exception. Blocking a user because our hook
 misread a file is worse than missing an unwanted commit. strict mode is
 opt-in, so users who want the guarantee accept the cost of occasional
 misses when Python / config / environment goes sideways.
+
+The protective hooks (main_protection, branch naming, ...) never shell out.
+The merge-gate helpers at the bottom (0.10.0) use git/gh only to classify a
+command that was already identified as a gate target (branch lookup,
+`@{push}`, `gh pr view`, `gh pr list`), each with a time limit, and the
+merge-gate hook fails CLOSED once a target is identified (merge-gate.md L9).
 """
 
 from __future__ import annotations

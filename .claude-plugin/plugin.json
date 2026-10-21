@@ -1,7 +1,7 @@
 {
   "name": "ddaro",
-  "version": "0.9.2",
-  "description": "Worktree-per-session git workflow for parallel Claude Code sessions: isolated worktree + branch per session, deletion-aware commits with automatic context snapshots, PR merges driven through CI, crash recovery, protective hooks (main protection, branch naming). Per-command instruction files keep token use low.",
+  "version": "0.10.0",
+  "description": "Worktree-per-session git workflow for parallel Claude Code sessions: isolated worktree + branch per session, deletion-aware commits with automatic context snapshots, PR merges driven through CI, crash recovery, protective hooks (main protection, branch naming), and an opt-in merge gate (merge_gate strict: a scripted /ddaro check ties PASS to the commit; gh pr merge is blocked without it). Per-command instruction files keep token use low.",
   "author": {
     "name": "haroom",
     "url": "https://github.com/minwoo-data"
@@ -20,7 +20,9 @@
     "crash-recovery",
     "adopt",
     "main-protection",
-    "ddaro"
+    "ddaro",
+    "merge-gate",
+    "prism"
   ],
   "commands": "./commands/"
 }

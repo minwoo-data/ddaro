@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-20
+
+Merge gate (design track G, `docs/design/merge-gate.md` v3.3, slice S2). Opt-in: `merge_gate` is `off` by default and nothing changes until a project turns it on. Needs prism 0.6.0 (`report-contract.json`, `--run-tag` gate runs).
+
+### Added
+- `hooks/gate.py`: the single writer of `<main>/.ddaro/gates/`. `check-begin` (readiness, cycle cleanup, run number and scope: full / recheck / rejudge / tests-only, the project's `verify.json` tests before any review), `check-record` (judges prism's contract-2 report: meta and lens completeness, record format, new blockers at `gate_block_severity` and above, grounding failures, blocker closing only on a REJECTED record whose quote sits on a changed code line, carry of late-recorded runs), `status` (mergeable / reason / next with the spec's priority order, PASS carry-over for document-only commits), `close --merged --pr N` (a cycle closes only through a MERGED PR whose head descends from this cycle), `retire`, and the person-only `approve`, `close`, `reset`. Every verdict is JSON on stdout with exit 0; `summary` lines are what the command files print.
+- `hooks/check-merge-gate.py` (PreToolUse `Bash|Edit|Write|NotebookEdit`, timeout 30 s): with `merge_gate` strict it blocks `gh pr merge` without `--match-head-commit <PR head>` or without a PASS for that head (docs-only PRs and approved commits pass), `--auto`, a merge chained after a branch-changing git command, write `gh api`, pushes to the base branch (explicit refspec, `--all`, `--mirror`, `--delete`, implied targets via `push.default` / `@{push}`, `-c push.*`), pushes into an auto-merge PR without a PASS, gh and git aliases, the person-only gate commands, weakening config changes (`config_tool.py set`, Edit/Write of `.ddaro/config.json`), and shell or tool writes to `.ddaro/gates/**`, `.ddaro/verify.json`, a run folder's `prism-report.json` / `prism-run.json`, `.ddaro` itself, or a `.ddaro/config.json` outside `<main>`. `warn` runs the same checks as `additionalContext`. Stdlib-only fast path; once a gate target is identified any failure blocks; before that the raw-text regexes decide.
+- `config_tool.py`: schema 4 (`merge_gate`, `gate_block_severity`, `gate_verify` with value checks), `init <main> [key=value ...]`, `is_weakening` / `weakening_changes` (imported by the hook), the `<git-common-dir>/ddaro-gate` marker, `.ddaro/config.lock`.
+- `_shared.py`: new helpers only (`segments_with_cwd`, `scan_git_global_opts` with accumulating `-C`, `main_root_of`, `load_main_config_status`, `gate_mode`, `file_lock`, `branch_enc`, prism install lookup through `installed_plugins.json`); every existing function keeps its contract.
+- Tests: `tests/test_gate.py` (67), `tests/test_merge_gate_hook.py` (71), `tests/test_gate_prism_real.py` (2, end to end against the installed prism 0.6.0 scripts, skipped when absent), run-folder cases in `test_main_edit.py`, lint rules in `test_command_files.py`.
+
+### Changed
+- `/ddaro:check` with the gate on: `gate.py check-begin` -> the Skill tool runs `prism:prism` with the script's exact arguments -> `gate.py check-record`; the script's summary is printed verbatim. With the gate off the 0.9.2 flow is unchanged. `allowed-tools` of `ddaro-check.md` and `ddaro.md` gain `Skill`.
+- `/ddaro:merge` with the gate on: a gate status step before step 1, no commits on the user's behalf, PR bodies through `--body-file`, a stop after any CI fix commit ("재확인 필요"), unanswered SUSPECTED questions shown before the merge confirmation (D11), `--match-head-commit` on the merge command, `gate.py close --merged` after the sync.
+- `/ddaro:clear` and `/ddaro:abandon` call `gate.py retire` after deleting the branch. `/ddaro:config` documents the gate keys and the person-only changes. `reference/config.md` (verify.json, documents, state, `init`) and `reference/hooks.md` (the new row) updated.
+- `check-main-edit.py` allows writes under `<main>/.ddaro/runs/**` while `merge_gate` is warn or strict (prism writes its run files there); with the gate off it behaves exactly as before.
+- First-time setup creates the config with `config_tool.py init` and offers `merge_gate` as item 10.
+
+### Known gaps (by design, see the design document's threat model)
+- Commands inside scripts, `bash -c`, `eval` or command substitution; the user's own terminal and `!` commands; a GitHub web merge on a repository without required checks; hooks that cannot run (no Python, timeout).
+
 ## [0.9.2] - 2026-10-14
 
 Follow prism 0.5.0 (Improvement lens retired, idea pass).

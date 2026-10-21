@@ -69,7 +69,7 @@ You fire up Session A to fix billing and Session B to refactor auth. Both edit `
 /ddaro:review <file>          # doc: prism design lenses + triad / diff: prism --diff; findings collated back in
 /ddaro:commit                 # safe commit + push + context snapshot
 /ddaro:commit --verify        # ...plus run the project's verify command(s) first (new in 0.4.0)
-/ddaro:check                  # pre-merge prism + ship-checklist gate (new in 0.6.0)
+/ddaro:check                  # pre-merge gate: tests + prism on the diff; scripted PASS/BLOCK tied to the commit when merge_gate is on (0.10.0)
 /ddaro:merge                  # size-based review + CI orchestration + merge + sync-main (new in 0.4.0)
 ```
 
@@ -156,6 +156,10 @@ The protective hooks (main protection + branch-naming, cross-worktree health, wo
 **Upgrading from <= 0.4.0:** older versions installed these hooks into each project's `.claude/settings.json`. Claude Code de-duplicates hooks by exact command string, so there is no double-fire, but the leftover entries are now redundant. Remove them in one shot with `/ddaro:config migrate` (idempotent; leaves all non-ddaro hooks untouched).
 
 ---
+
+### Merge gate *(0.10.0, opt-in)*
+
+`/ddaro:config merge_gate strict` turns `/ddaro:check` into a script-judged gate and makes `gh pr merge` need a PASS for the exact commit being merged. The flow: `gate.py check-begin` runs the project's tests (`<main>/.ddaro/verify.json`), the prism `--run-tag` gate run reviews the diff (fresh agents, machine-checked quotes pinned to the commit), and `gate.py check-record` turns the report into PASS or BLOCK bound to that SHA. A later code commit voids the PASS (document-only commits carry it); an open blocker only closes when prism's Evidence pass rejects it with a quote that sits on a changed code line. The PreToolUse hook `check-merge-gate.py` then refuses `gh pr merge` without `--match-head-commit <head>` or without a PASS for that head, pushes to the base branch, write `gh api`, and any model-side change to the gate's own files or settings; approvals, overrides and weakening are a person's `!` commands. `warn` runs the same checks and only warns. Needs prism >= 0.6.0. Details: `reference/config.md` and `reference/hooks.md`.
 
 ## Example session
 
