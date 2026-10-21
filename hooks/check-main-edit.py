@@ -81,11 +81,31 @@ def main() -> int:
         if _glob_match(rel_posix, pat):
             return 0
 
+    if run_folder_allowed(main_path, rel_posix):
+        return 0
+
     if bypass_active():
         return 0
 
     print(_refusal(main_path, target), file=sys.stderr)
     return 2
+
+
+def run_folder_allowed(main_path: Path, rel_posix: str) -> bool:
+    """0.10.0 merge gate (L5): prism writes its run files under
+    `<main>/.ddaro/runs/**`, which sits inside the main worktree. Allow that
+    folder only while `<main>/.ddaro/config.json` has `merge_gate` warn or
+    strict; with the gate off this hook behaves exactly as before. The run
+    folder's `prism-report.json` / `prism-run.json` are guarded separately by
+    `check-merge-gate.py` (L11)."""
+    try:
+        if not rel_posix.startswith(".ddaro/runs/"):
+            return False
+        from _shared import gate_mode, load_main_config_status
+        cfg, status = load_main_config_status(main_path)
+        return status == "ok" and gate_mode(cfg) != "off"
+    except Exception:
+        return False
 
 
 def _glob_match(path: str, pattern: str) -> bool:

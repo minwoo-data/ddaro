@@ -90,3 +90,25 @@ def test_bypass_env_allows(main_wt):
     main_wt.write_config(main_protection="strict")
     p = main_wt.payload("Edit", file_path=_in_main(main_wt, "src/app.py"))
     assert run_hook(HOOK, p, env={"ALLOW_MAIN_DIRECT": "1"}).returncode == ALLOW
+
+
+# --- 0.10.0 merge gate: run-folder allowance (merge-gate.md L5) ---
+
+def _runs_file(main_wt) -> str:
+    return _in_main(main_wt, ".ddaro/runs/d-busan.f486a3be/3-abc123/pass1.claude.security.txt")
+
+
+def test_run_folder_write_allowed_when_gate_on(main_wt):
+    for mode in ("warn", "strict"):
+        main_wt.write_config(main_protection="strict", merge_gate=mode)
+        assert run_hook(HOOK, main_wt.payload("Write", file_path=_runs_file(main_wt))).returncode == ALLOW
+        # everything else on main stays blocked
+        assert run_hook(HOOK, main_wt.payload("Write", file_path=_in_main(main_wt, "src/a.js"))).returncode == BLOCK
+        assert run_hook(HOOK, main_wt.payload("Write", file_path=_in_main(main_wt, ".ddaro/gates/x.json"))).returncode == BLOCK
+
+
+def test_run_folder_write_blocked_when_gate_off(main_wt):
+    main_wt.write_config(main_protection="strict", merge_gate="off")
+    assert run_hook(HOOK, main_wt.payload("Write", file_path=_runs_file(main_wt))).returncode == BLOCK
+    main_wt.write_config(main_protection="strict")          # key absent == off
+    assert run_hook(HOOK, main_wt.payload("Write", file_path=_runs_file(main_wt))).returncode == BLOCK
