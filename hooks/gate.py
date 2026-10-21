@@ -69,7 +69,10 @@ SEVERITIES = ("LOW", "MED", "HIGH", "CRIT")
 SEV_RANK = {s: i for i, s in enumerate(SEVERITIES)}
 GROUNDED = ("SUPPORTED", "REPRODUCED")
 DOC_EXTS = {".md", ".mdx", ".txt", ".rst", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
-DEFAULT_PLANNING_PATTERNS = [".planning/**", ".gsd/**", "STATE.md", "ROADMAP.md", "CHANGELOG.md", ".claude/**"]
+# The gate's document default is NARROWER than check-main-edit's: `.claude/**` holds
+# slash commands with inline `!` bash and allowed-tools, which must be reviewed.
+DEFAULT_PLANNING_PATTERNS = [".planning/**", ".gsd/**", "STATE.md", "ROADMAP.md", "CHANGELOG.md"]
+NEVER_DOC_PREFIXES = (".claude/", ".github/", ".ddaro/")
 INDENT_SENSITIVE = {".py", ".yml", ".yaml", ".pyi", ".nim", ".coffee", ".haml", ".pug", ".sass", ".styl"}
 LOCK_TIMEOUT = 5.0
 VERIFY_BUDGET = 540
@@ -117,18 +120,27 @@ def quote_from_evidence(ev) -> str:
 
 # --- git ------------------------------------------------------------------
 
+class GitUnavailable(Exception):
+    """git could not run or timed out: never a verdict on anything."""
+
+
 class Repo:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, timeout: float = 30):
         self.root = Path(root)
+        self.timeout = timeout
 
-    def run(self, args, timeout=30):
-        return run_cmd(["git", *args], cwd=self.root, timeout=timeout)
+    def run(self, args, timeout=None):
+        t = self.timeout if timeout is None else min(timeout, self.timeout) if self.timeout else timeout
+        rc, out, err = run_cmd(["git", "-c", "core.quotepath=false", *args], cwd=self.root, timeout=t)
+        if rc is None:
+            raise GitUnavailable(f"git {' '.join(str(a) for a in args[:3])}: {err.strip()[-200:] or 'could not run'}")
+        return rc, out, err
 
-    def out(self, args, timeout=30) -> Optional[str]:
+    def out(self, args, timeout=None) -> Optional[str]:
         rc, out, _ = self.run(args, timeout)
         return out.strip() if rc == 0 else None
 
-    def ok(self, args, timeout=30) -> bool:
+    def ok(self, args, timeout=None) -> bool:
         rc, _, _ = self.run(args, timeout)
         return rc == 0
 
@@ -162,7 +174,7 @@ class Repo:
     def diff_names(self, a: str, b: str, renames=False) -> Optional[list]:
         args = ["diff", "--name-only", "-M" if renames else "--no-renames", a, b]
         out = self.out(args)
-        return None if out is None else [l for l in out.splitlines() if l]
+        return None if out is None else [unquote_git_path(l) for l in out.splitlines() if l]
 
     def blob(self, sha: str, path: str) -> Optional[str]:
         return self.out(["rev-parse", "--verify", "--quiet", f"{sha}:{path}"])
@@ -185,6 +197,32 @@ class Repo:
             if self.ref_exists(ref):
                 return ref
         return None
+
+
+def unquote_git_path(p: str) -> str:
+    """Undo git's C-style path quoting (`"a/\\354\\225\\234.py"`): strip the
+    quotes and decode `\\ooo` octal bytes and `\\"`, `\\\\`, `\\t`, `\\n`. The diffs
+    run with `core.quotepath=false`, so this only matters for `"` and `\\`."""
+    s = str(p)
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        body = s[1:-1]
+        out = bytearray()
+        i = 0
+        while i < len(body):
+            c = body[i]
+            if c == "\\" and i + 1 < len(body):
+                n = body[i + 1]
+                if n in "01234567" and i + 3 < len(body):
+                    out += bytes([int(body[i + 1:i + 4], 8)])
+                    i += 4
+                    continue
+                out += {"n": b"\n", "t": b"\t", '"': b'"', "\\": b"\\", "r": b"\r"}.get(n, n.encode("utf-8"))
+                i += 2
+                continue
+            out += c.encode("utf-8")
+            i += 1
+        return out.decode("utf-8", "replace")
+    return s
 
 
 # --- state ----------------------------------------------------------------
@@ -385,13 +423,25 @@ def glob_match(path: str, pattern: str) -> bool:
     return re.fullmatch(rx, path) is not None
 
 
+def planning_patterns(cfg: Optional[dict]) -> list:
+    """`planning_patterns` as a list of strings; anything else (a raw JSON
+    string written by an old `set`, a non-list) falls back to the default."""
+    pats = (cfg or {}).get("planning_patterns")
+    if isinstance(pats, list) and all(isinstance(x, str) for x in pats) and pats:
+        return pats
+    return DEFAULT_PLANNING_PATTERNS
+
+
 def is_doc(path: str, cfg: Optional[dict]) -> bool:
-    """A document: matches `planning_patterns` AND has a document extension."""
-    p = path.replace("\\", "/")
+    """A document: matches `planning_patterns`, has a document extension, and
+    does not live under `.claude/`, `.github/` or `.ddaro/` (executable config
+    for the agent or CI is never a document, whatever the patterns say)."""
+    p = path.replace("\\", "/").lstrip("./")
     if Path(p).suffix.lower() not in DOC_EXTS:
         return False
-    pats = (cfg or {}).get("planning_patterns") or DEFAULT_PLANNING_PATTERNS
-    return any(glob_match(p, pat) for pat in pats)
+    if p.startswith(NEVER_DOC_PREFIXES):
+        return False
+    return any(glob_match(p, pat) for pat in planning_patterns(cfg))
 
 
 def relpath_in_repo(file: str, root: Path) -> str:
@@ -549,6 +599,8 @@ def confirm_merged(state: dict, main: Path, repo: Repo, branch: str, base: str, 
     closed_nums = {c.get("pr") for c in state.get("closes", [])}
     heads = [r.get("head") for r in cycle_runs(state) if r.get("head")]
     heads += [a.get("head") for a in state.get("approvals", []) if a.get("cycle") == state.get("cycle") and a.get("head")]
+    fetched = 0
+    notes = []
     for c in cands:
         if not isinstance(c, dict) or c.get("state") != "MERGED":
             continue
@@ -561,13 +613,20 @@ def confirm_merged(state: dict, main: Path, repo: Repo, branch: str, base: str, 
         if not SHA40.match(pr_head):
             continue
         if not repo.has_commit(pr_head):
-            repo.run(["fetch", "origin", f"pull/{num}/head"], timeout=FETCH_TIMEOUT)
-        if not repo.has_commit(pr_head):
-            continue
+            if fetched >= 1:
+                notes.append(f"PR #{num} merged but head {pr_head[:7]} not local (one fetch per check)")
+                continue
+            fetched += 1
+            rc, _, err = repo.run(["fetch", "origin", f"pull/{num}/head"], timeout=FETCH_TIMEOUT)
+            if not repo.has_commit(pr_head):
+                tail = (err.strip().splitlines() or ["?"])[-1]
+                notes.append(f"PR #{num} merged but head {pr_head[:7]} not local after fetch (exit {rc}: {tail})")
+                continue
         if any(h == pr_head or repo.is_ancestor(h, pr_head) for h in heads):
             close_cycle(state, main, branch, {"pr": num, "merged_head": pr_head, "how": "auto_detected" if pr is None else "merge_command"})
             return {"closed": True, "pr": num, "note": f"PR #{num} merged; cycle -> {state['cycle']}"}
-    return {"closed": False, "pr": None, "note": "merged PR not found"}
+        notes.append(f"PR #{num} merged but its head {pr_head[:7]} descends from no run of cycle {state.get('cycle')}")
+    return {"closed": False, "pr": None, "note": "; ".join(notes) if notes else "merged PR not found"}
 
 
 def close_cycle(state: dict, main: Path, branch: str, close_info: dict) -> None:
@@ -578,6 +637,13 @@ def close_cycle(state: dict, main: Path, branch: str, close_info: dict) -> None:
     arch_p = archive_path(main, branch, cyc)
     arch = read_json_or_none(arch_p) if arch_p.exists() else None
     if not isinstance(arch, dict):
+        if arch_p.exists():
+            aside = arch_p.with_name(f"{arch_p.stem}.corrupt-{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json")
+            try:
+                os.replace(arch_p, aside)
+                close_info = dict(close_info, note=f"unreadable archive moved to {aside.name}")
+            except OSError:
+                pass
         arch = {"branch": branch, "cycle": cyc, "runs": [], "blockers": []}
     arch["runs"] = [r for r in arch.get("runs", []) if r.get("run") not in {x.get("run") for x in runs}] + runs
     arch["blockers"] = [b for b in arch.get("blockers", []) if b.get("id") not in {x.get("id") for x in blockers}] + blockers
@@ -669,24 +735,21 @@ def diff_index(repo: Repo, old: str, new: str) -> dict:
         for line in out.splitlines():
             if line.startswith("diff --git "):
                 cur = {"old_path": None, "new_path": None, "hunks": [], "deleted": False}
-                m = re.match(r'^diff --git (?:"?a/(.*?)"?) (?:"?b/(.*?)"?)$', line)
-                if m:
-                    cur["old_path"], cur["new_path"] = m.group(1), m.group(2)
                 continue
             if cur is None:
                 continue
             if line.startswith("rename from "):
-                cur["old_path"] = line[len("rename from "):]
+                cur["old_path"] = unquote_git_path(line[len("rename from "):])
             elif line.startswith("rename to "):
-                cur["new_path"] = line[len("rename to "):]
+                cur["new_path"] = unquote_git_path(line[len("rename to "):])
             elif line.startswith("deleted file"):
                 cur["deleted"] = True
             elif line.startswith("--- "):
-                p = line[4:]
+                p = unquote_git_path(line[4:])
                 if p != "/dev/null":
                     cur["old_path"] = p[2:] if p.startswith("a/") else p
             elif line.startswith("+++ "):
-                p = line[4:]
+                p = unquote_git_path(line[4:])
                 if p != "/dev/null":
                     cur["new_path"] = p[2:] if p.startswith("b/") else p
                 key = cur["new_path"] or cur["old_path"]
@@ -785,19 +848,22 @@ def shift_lines(repo: Repo, blocker: dict, run_head: str, base_fallback: str):
         return blocker.get("lines"), False
     a, b = rng
     delta = 0
+    extend = 0
     for h in entry["hunks"]:
         os_, oc = h["old_start"], h["old_count"]
         o_end = os_ + max(oc, 1) - 1
         if oc == 0:
-            # pure insertion before line os_+1
+            # pure insertion after old line os_: before the range shifts it, inside extends it
             if os_ < a:
                 delta += h["new_count"]
+            elif os_ < b:
+                extend += h["new_count"]
             continue
         if o_end < a:
             delta += h["new_count"] - oc
         elif os_ <= b and o_end >= a:
             return blocker.get("lines"), True
-    na, nb = a + delta, b + delta
+    na, nb = a + delta, b + delta + extend
     return (f"{na}-{nb}" if nb != na else str(na)), False
 
 
@@ -1092,6 +1158,9 @@ def finalize_pending(state: dict, main: Path, repo: Repo, cfg: Optional[dict]) -
     done = []
     for run in cycle_runs(state):
         if run.get("kind") != "review":
+            if run.get("outcome") is None:
+                run.update({"outcome": "ERROR", "error": "abandoned (verify)", "finished": now_iso(), "finalized_late": False})
+                done.append(run)
             continue
         pending = run.get("outcome") is None
         abandoned = run.get("outcome") == "ERROR" and run.get("error") == "abandoned"
@@ -1113,27 +1182,40 @@ def finalize_pending(state: dict, main: Path, repo: Repo, cfg: Optional[dict]) -
 # --- status (L3, L4, merge guard priorities) -------------------------------
 
 def carry_files(repo: Repo, lj: dict, head_t: str, base: str) -> Optional[list]:
-    """L4: files that count between the PASS head H and target T."""
+    """L4: files that count between the PASS head H and target T. Three git
+    calls, whatever the number of files; None when git could not answer."""
     h = lj.get("head")
     files = repo.diff_names(h, head_t)
     if files is None:
         return None
-    reviewed = set(repo.diff_names(lj.get("merge_base") or h, h) or [])
+    reviewed_l = repo.diff_names(lj.get("merge_base") or h, h)
+    if reviewed_l is None:
+        return None
+    reviewed = set(reviewed_l)
     bref = repo.base_ref(base)
     mb_t = repo.merge_base(head_t, bref) if bref else None
+    # a file not reviewed whose content at T equals the base merge-base came from the base:
+    # those are exactly the files ABSENT from diff(mb_t, T)
+    from_t = None
+    if mb_t:
+        from_t = repo.diff_names(mb_t, head_t)
+        if from_t is None:
+            return None
+        from_t = set(from_t)
     counted = []
     for f in files:
-        if f not in reviewed and mb_t:
-            if repo.blob(head_t, f) == repo.blob(mb_t, f):
-                continue
+        if f not in reviewed and from_t is not None and f not in from_t:
+            continue
         counted.append(f)
     return counted
 
 
 def compute_status(main: Path, branch: str, head: Optional[str], repo: Optional[Repo] = None,
                    pr_files: Optional[list] = None, pr_changed_files: Optional[int] = None,
-                   local_head: Optional[str] = None) -> dict:
-    """Mergeability of `head` on `branch`. Read-only, lock-free (L1)."""
+                   local_head: Optional[str] = None, deadline=None) -> dict:
+    """Mergeability of `head` on `branch`. Read-only, lock-free (L1). `deadline`
+    is a callable that raises when the caller's time is up (the hook); a git
+    that cannot answer yields reason `unreadable` (never mergeable)."""
     main = Path(main)
     cfg, _ = load_main_config_status(main)
     base = base_branch(cfg)
@@ -1141,6 +1223,15 @@ def compute_status(main: Path, branch: str, head: Optional[str], repo: Optional[
     out = {"outcome": "OK", "mergeable": False, "reason": None, "head": head, "branch": branch,
            "last_judged": None, "open_blockers": [], "questions": [], "cycle": None, "cycle_open": None,
            "next": None, "since": []}
+    try:
+        return _compute_status(out, main, branch, head, repo, cfg, base, pr_files, pr_changed_files, local_head,
+                               deadline or (lambda: None))
+    except GitUnavailable as e:
+        out.update(reason="unreadable", next=f"git could not answer ({e}); retry")
+        return out
+
+
+def _compute_status(out, main, branch, head, repo, cfg, base, pr_files, pr_changed_files, local_head, deadline) -> dict:
     state, st = load_state(main, branch)
     if st == "unreadable":
         out.update(reason="unreadable", next="상태 파일이 깨짐: 사람이 `! python <plugin>/hooks/gate.py reset <main> <branch>`")
@@ -1152,6 +1243,7 @@ def compute_status(main: Path, branch: str, head: Optional[str], repo: Optional[
         out.update(reason="unreadable", next="상태 파일의 branch 가 다름 (파일 손상)")
         return out
     out["cycle"] = state.get("cycle")
+    deadline()
     if head is None:
         head = repo.rev(f"refs/heads/{branch}") or repo.head()
         out["head"] = head
@@ -1197,7 +1289,9 @@ def compute_status(main: Path, branch: str, head: Optional[str], repo: Optional[
     if head and lj.get("head") == head:
         out.update(mergeable=True, reason="head_match", next="/ddaro merge")
         return out
+    deadline()
     if head and repo.has_commit(lj.get("head") or "") and repo.has_commit(head) and repo.is_ancestor(lj["head"], head):
+        deadline()
         counted = carry_files(repo, lj, head, base)
         if counted is not None:
             out["since"] = [{"file": f, "kind": "doc" if is_doc(f, cfg) else "code"} for f in counted]
@@ -1243,20 +1337,23 @@ def resolve_main(wt: Path):
     cfg, st = load_main_config_status(main)
     if cfg is not None and cfg.get("main_worktree"):
         mw = Path(str(cfg["main_worktree"]))
-        if mw.is_dir():
+        # honour main_worktree only when it is this same repository (the hook and
+        # `status` resolve <main> from git, so the state must live in one place)
+        if mw.is_dir() and main_root_of(mw) == main:
             main = mw.resolve()
     return main, cfg, st
 
 
-def refused(msg: str, **extra) -> dict:
-    d = {"outcome": "REFUSED", "message": msg, "summary": [f"[ddaro] check: REFUSED - {msg}"]}
+def refused(msg: str, summary_extra: Optional[list] = None, **extra) -> dict:
+    d = {"outcome": "REFUSED", "message": msg, "summary": [f"[ddaro] check: REFUSED - {msg}"] + list(summary_extra or [])}
     d.update(extra)
     return d
 
 
-def make_run_tag(branch: str, head: str, run_no: int) -> str:
-    """`<branch>-<sha7>-<run>-<rand6>`, limited to prism's run-tag alphabet
-    `[A-Za-z0-9._-]` and 64 chars (the spec's `@`/`#` are outside it)."""
+def make_run_tag(branch: str, head: str, run_no: int) -> tuple:
+    """Returns (run_tag, rand): `<branch>-<sha7>-<run>-<rand6>` limited to
+    prism's run-tag alphabet `[A-Za-z0-9._-]` and 64 chars (the spec's `@`/`#`
+    are outside it), and the 6-hex `rand` that also names the run folder."""
     rand = secrets.token_hex(3)
     tail = f"-{head[:7]}-{run_no}-{rand}"
     b = re.sub(r"[^A-Za-z0-9._-]", "_", branch).strip("._-") or "branch"
@@ -1264,7 +1361,41 @@ def make_run_tag(branch: str, head: str, run_no: int) -> str:
     return (b[: max(1, 64 - len(tail))] + tail), rand
 
 
+def gate_snapshot(main: Path, branch: str) -> dict:
+    """Bytes (sha256) of every file the tests must not touch: the branch state
+    file, its .bak, config.json, verify.json, and the names of everything under
+    gates/ (c13: a committed test could otherwise forge a PASS or approval)."""
+    snap = {}
+    for p in (state_path(main, branch), Path(str(state_path(main, branch)) + ".bak"),
+              Path(main) / ".ddaro" / "config.json", Path(main) / ".ddaro" / "verify.json"):
+        try:
+            snap[posix(p)] = hashlib.sha256(p.read_bytes()).hexdigest()
+        except FileNotFoundError:
+            snap[posix(p)] = None
+        except Exception:
+            snap[posix(p)] = "?"
+    gd = gates_dir(main)
+    try:
+        snap["__gates__"] = sorted(x.name for x in gd.iterdir()) if gd.is_dir() else []
+    except Exception:
+        snap["__gates__"] = "?"
+    marker = None
+    try:
+        from _shared import gate_marker_path
+        marker = gate_marker_path(main)
+    except Exception:
+        pass
+    if marker is not None:
+        snap["__marker__"] = marker.exists()
+    return snap
+
+
+def gate_snapshot_diff(before: dict, after: dict) -> list:
+    return sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+
+
 def cmd_check_begin(wt: Path, full: bool) -> dict:
+    t0 = time.monotonic()
     main, cfg, cfg_status = resolve_main(wt)
     if cfg is None:
         return refused(f"<main> config missing or unreadable ({cfg_status}) at {main}")
@@ -1358,6 +1489,8 @@ def cmd_check_begin(wt: Path, full: bool) -> dict:
             run_no = int(state.get("next_run") or 1)
             state["next_run"] = run_no + 1
             run_tag, rand = make_run_tag(branch, head, run_no)
+            if verify_only:
+                notes.append("verify only: tests re-run at the already judged head")
             rdir = runs_dir(main, branch) / f"{run_no}-{rand}"
             rdir.mkdir(parents=True, exist_ok=False)
             run_dir = posix(rdir)
@@ -1378,39 +1511,60 @@ def cmd_check_begin(wt: Path, full: bool) -> dict:
            "finalized": [{"run": f.get("run"), "outcome": f.get("outcome"), "error": f.get("error")} for f in finalized],
            "notes": notes, "verify": None}
 
-    # 4. tests before the review (no lock)
+    note_lines = [f"  note: {n}" for n in notes]
+    # 4. tests before the review (no lock). The gate's own files are snapshotted
+    # first: a test that touches them is refused and the state restored (c13).
     changed = repo.diff_names(mb, head) or []
     cmds, block_reason, note = select_verify(main, cfg, changed)
     verify = {"commands": cmds, "results": [], "note": note}
     failed = None
+    snap_before = gate_snapshot(main, branch)
+    state_bytes = None
+    try:
+        state_bytes = state_path(main, branch).read_bytes()
+    except Exception:
+        pass
     if block_reason:
         failed = block_reason
     elif cmds:
-        results, failed = run_verify(Path(top), cmds)
+        elapsed = time.monotonic() - t0
+        budget = max(1, min(verify_budget(), int(VERIFY_BUDGET + 20 - elapsed)))
+        results, failed = run_verify(Path(top), cmds, budget=budget)
         verify["results"] = results
     out["verify"] = verify
+    tampered = gate_snapshot_diff(snap_before, gate_snapshot(main, branch))
+    if tampered:
+        if state_bytes is not None:
+            try:
+                with locked(main, branch):
+                    write_json_atomic(state_path(main, branch), json.loads(state_bytes.decode("utf-8")), keep_bak=False)
+            except Exception:
+                pass
+        why = "테스트가 게이트 상태를 바꿈: " + ", ".join(Path(k).name if not k.startswith("__") else k.strip("_") for k in tampered[:5])
+        _record_verify_run(main, branch, run_no, "REFUSED", verify, why)
+        return refused(why, run=run_no, head=head, verify=verify, summary_extra=note_lines)
     # tree must be unchanged by the tests
     head2 = repo.head()
     dirty2 = repo.dirty_tracked()
     if head2 != head or dirty2:
         why = "HEAD moved" if head2 != head else ", ".join(dirty2[:5])
         _record_verify_run(main, branch, run_no, "REFUSED", verify, f"테스트가 트리를 바꿈: {why}")
-        return refused(f"테스트가 트리를 바꿈: {why}", run=run_no, head=head, verify=verify)
+        return refused(f"테스트가 트리를 바꿈: {why}", run=run_no, head=head, verify=verify, summary_extra=note_lines)
     if failed:
-        _record_verify_run(main, branch, run_no, "BLOCK", verify, failed)
+        rec_note = _record_verify_run(main, branch, run_no, "BLOCK", verify, failed)
         out.update(outcome="BLOCK", message=f"테스트 실패: {failed}")
         out["summary"] = [f"[ddaro] check {run_no} ({scope} {_short_range(rng, head)}): BLOCK",
-                          f"  verify: {failed}", "  next: fix, commit, then /ddaro check"]
+                          f"  verify: {failed}"] + note_lines + rec_note + ["  next: fix, commit, then /ddaro check"]
         return out
     if verify_only:
-        _record_verify_run(main, branch, run_no, "PASS", verify, None)
+        rec_note = _record_verify_run(main, branch, run_no, "PASS", verify, None)
         out.update(outcome="PASS", message="tests passed at the already judged head")
         out["summary"] = [f"[ddaro] check {run_no} (verify only @ {head[:7]}): PASS",
-                          "  verify: " + _verify_line(verify), "  next: /ddaro merge"]
+                          "  verify: " + _verify_line(verify)] + note_lines + rec_note + ["  next: /ddaro merge"]
         return out
 
     # 5. output
-    _store_verify(main, branch, run_no, verify)
+    rec_note = _store_verify(main, branch, run_no, verify)
     args = []
     if scope != "rejudge":
         args += ["--diff", rng]
@@ -1419,7 +1573,7 @@ def cmd_check_begin(wt: Path, full: bool) -> dict:
     out["prism_skill_args"] = " ".join(args)
     out["summary"] = [f"[ddaro] check {run_no} ({scope} {_short_range(rng, head)}): tests passed, review next",
                       "  verify: " + _verify_line(verify),
-                      f"  open blockers carried: {len(opens)}"] + [f"  note: {n}" for n in notes]
+                      f"  open blockers carried: {len(opens)}"] + note_lines + rec_note
     return out
 
 
@@ -1441,29 +1595,41 @@ def _verify_line(verify: dict) -> str:
     return "; ".join(parts) if parts else "(no command)"
 
 
-def _record_verify_run(main: Path, branch: str, run_no: int, outcome: str, verify: dict, error: Optional[str]) -> None:
-    with locked(main, branch):
-        state, st = load_state(main, branch)
-        if st != "ok":
-            return
-        run = find_run(state, run_no)
-        if run is None:
-            return
+def _record_verify_run(main: Path, branch: str, run_no: int, outcome: str, verify: dict, error: Optional[str]) -> list:
+    """Record a tests-only outcome. Returns summary lines (empty when recorded;
+    a note when the lock stayed busy or the state vanished, c7)."""
+    def mutate(run):
         run.update({"kind": "verify", "outcome": outcome, "finished": now_iso(), "verify": verify})
         if error:
             run["error"] = error
-        save_state(main, branch, state)
+    return _update_run(main, branch, run_no, mutate, "verify result")
 
 
-def _store_verify(main: Path, branch: str, run_no: int, verify: dict) -> None:
-    with locked(main, branch):
-        state, st = load_state(main, branch)
-        if st != "ok":
-            return
-        run = find_run(state, run_no)
-        if run is not None:
-            run["verify"] = verify
-            save_state(main, branch, state)
+def _store_verify(main: Path, branch: str, run_no: int, verify: dict) -> list:
+    def mutate(run):
+        run["verify"] = verify
+    return _update_run(main, branch, run_no, mutate, "verify results")
+
+
+def _update_run(main: Path, branch: str, run_no: int, mutate, what: str) -> list:
+    for attempt in range(2):
+        try:
+            with locked(main, branch) if attempt == 0 else file_lock(lock_path(main, branch), LOCK_TIMEOUT * 4):
+                state, st = load_state(main, branch)
+                if st != "ok":
+                    return [f"  note: {what} of run {run_no} not recorded (state file {st})"]
+                run = find_run(state, run_no)
+                if run is None:
+                    return [f"  note: {what} of run {run_no} not recorded (run missing from the state file)"]
+                mutate(run)
+                save_state(main, branch, state)
+                return []
+        except TimeoutError as e:
+            if attempt == 1:
+                return [f"  note: {what} of run {run_no} not recorded ({e}); the run will be finalized by the next check-begin"]
+        except OSError as e:
+            return [f"  note: {what} of run {run_no} not recorded ({e})"]
+    return []
 
 
 # --- check-record -----------------------------------------------------------
@@ -1568,10 +1734,12 @@ def _record_in_archive(main: Path, branch: str, run_no: int, repo: Repo, cfg) ->
     """A run that is only in a closed cycle's archive: judge once there, never
     into the current cycle (L2 '닫힌 주기의 실행')."""
     adir = archive_dir(main, branch)
+    unreadable = []
     if adir.is_dir():
         for f in sorted(adir.glob("cycle-*.json")):
             arch = read_json_or_none(f)
             if not isinstance(arch, dict):
+                unreadable.append(f.name)
                 continue
             run = next((r for r in arch.get("runs", []) if r.get("run") == run_no), None)
             if run is None:
@@ -1593,6 +1761,8 @@ def _record_in_archive(main: Path, branch: str, run_no: int, repo: Repo, cfg) ->
                     write_json_atomic(f, arch, keep_bak=False)
             return {"outcome": "STALE", "run": run_no, "message": MSG_CYCLE_CLOSED, "archived_outcome": run.get("outcome"),
                     "summary": [f"[ddaro] check {run_no}: STALE - {MSG_CYCLE_CLOSED} (cycle {arch.get('cycle')} archived, recorded there as {run.get('outcome')})"]}
+    if unreadable:
+        return refused(f"run {run_no} not found in readable archives; unreadable: {', '.join(unreadable)}")
     return refused(f"run {run_no} not found for {branch}")
 
 
@@ -1631,13 +1801,16 @@ def cmd_retire(main: Path, branch: str) -> dict:
         return {"outcome": "OK", "retired": False, "message": f"branch {branch} still exists; nothing moved",
                 "summary": [f"[ddaro] gate retire: {branch} still exists, state kept"]}
     p = state_path(main, branch)
-    if not p.exists():
-        return {"outcome": "OK", "retired": False, "message": "no state file", "summary": ["[ddaro] gate retire: no state"]}
     try:
         with locked(main, branch):
+            if not p.exists():
+                return {"outcome": "OK", "retired": False, "message": "no state file", "summary": ["[ddaro] gate retire: no state"]}
             dest = archive_dir(main, branch) / f"retired-{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
             dest.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(p, dest)
+            try:
+                os.replace(p, dest)
+            except OSError as e:
+                return refused(f"could not move state file: {e}")
             for extra in (str(p) + ".bak",):
                 try:
                     os.unlink(extra)
@@ -1672,14 +1845,21 @@ def cmd_approve(main: Path, branch: str, head: str, reason: str) -> dict:
 
 def cmd_reset(main: Path, branch: str, force: bool = False) -> dict:
     p = state_path(main, branch)
-    if not p.exists():
-        return {"outcome": "OK", "reset": False, "message": "no state file", "summary": ["[ddaro] gate reset: no state file"]}
-    _, st = load_state(main, branch)
-    if st == "ok" and not force:
-        return refused("state file parses fine; reset is for unparseable damage only (pass --force to move it anyway)")
-    dest = archive_dir(main, branch) / f"{branch_enc(branch)}.{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(p, dest)
+    try:
+        with locked(main, branch):
+            if not p.exists():
+                return {"outcome": "OK", "reset": False, "message": "no state file", "summary": ["[ddaro] gate reset: no state file"]}
+            _, st = load_state(main, branch)
+            if st == "ok" and not force:
+                return refused("state file parses fine; reset is for unparseable damage only (pass --force to move it anyway)")
+            dest = archive_dir(main, branch) / f"{branch_enc(branch)}.{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.replace(p, dest)
+            except OSError as e:
+                return refused(f"could not move state file: {e}")
+    except TimeoutError as e:
+        return refused(str(e))
     return {"outcome": "OK", "reset": True, "archived_to": posix(dest), "summary": [f"[ddaro] gate reset: state -> {posix(dest)}"]}
 
 
@@ -1738,6 +1918,11 @@ def main(argv: list) -> int:
             return 2
     except GateError as e:
         print(f"[ddaro] gate {cmd} failed: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # a script failure: one readable first line, then the trace
+        import traceback
+        print(f"[ddaro] gate {cmd} failed: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc()
         return 1
     print(json.dumps(out, indent=1, ensure_ascii=False))
     return 0

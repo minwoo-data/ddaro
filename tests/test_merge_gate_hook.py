@@ -198,7 +198,8 @@ def test_merge_gh_timeout_blocks(g):
     g.gh(sleep=15)
     t0 = time.monotonic()
     r = bash(g, "gh pr merge 89 --squash --match-head-commit abc")
-    assert r.returncode == BLOCK and time.monotonic() - t0 < 30
+    assert r.returncode == BLOCK and "could not read the PR" in r.stderr and "[timeout]" in r.stderr
+    assert time.monotonic() - t0 < 20
 
 
 def test_heredoc_body_mentioning_merge_is_blocked_with_body_file_hint(g):
@@ -459,3 +460,188 @@ def test_hook_registered_in_hooks_json():
     assert len(entries) == 1 and entries[0].get("timeout") == 30
     grp = [grp for grp in hooks["hooks"]["PreToolUse"] if any("check-merge-gate.py" in h["command"] for h in grp["hooks"])][0]
     assert grp["matcher"] == "Bash|Edit|Write|NotebookEdit"
+
+
+# ---------------------------------------------------------------------------
+# prism review fixes (PR #22, 2026-10-20)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("cmd", [
+    "git push origin 'refs/heads/*:refs/heads/*'",
+    "git push origin 'refs/heads/*'",
+    "git push origin 'refs/heads/ma*'",
+    "git push origin --delete 'refs/heads/*'",
+    "git send-pack origin HEAD:refs/heads/master",
+    "git-push origin HEAD:master",
+    "/usr/lib/git-core/git-push origin master",
+])
+def test_push_wildcards_sendpack_dashed_binaries_blocked(g, cmd):
+    r = bash(g, cmd)
+    assert r.returncode == BLOCK, (cmd, r.stderr)
+
+
+def test_preexisting_git_alias_examined(g):
+    g.git("config", "alias.pm", "push origin HEAD:master")
+    g.git("config", "alias.sp", "!git push origin HEAD:master")
+    g.git("config", "alias.st", "status")
+    assert bash(g, "git pm").returncode == BLOCK
+    assert bash(g, "git sp").returncode == BLOCK and "shell command" in bash(g, "git sp").stderr
+    assert bash(g, "git st").returncode == ALLOW
+    assert bash(g, "git lfs ls-files").returncode == ALLOW
+
+
+def test_gh_alias_examined(g):
+    passed_pr(g)
+    g.gh(default={}, list=[], view={}, aliases={"mg": "pr merge --squash", "sh": "!gh pr merge"})
+    g.gh_script.write_text(json.dumps({"aliases": {"mg": "pr merge --squash", "sh": "!gh pr merge"},
+                                       "list": [], "view": {"89": {"number": 89, "state": "OPEN", "baseRefName": "master",
+                                                                     "headRefName": "d-busan", "headRefOid": g.head(),
+                                                                     "files": [{"path": "src/app.js"}], "changedFiles": 1}}}), encoding="utf-8")
+    r = bash(g, "gh mg 89")
+    assert r.returncode == BLOCK and "match-head-commit" in r.stderr
+    r = bash(g, "gh sh 89")
+    assert r.returncode == BLOCK and "shell command" in r.stderr
+
+
+@pytest.mark.parametrize("cmd,blocked", [
+    ("gh api graphql -F query=@merge.graphql", True),
+    ("gh api graphql --input body.json", True),
+    ("gh api graphql -f query=@q.graphql", True),
+    ("gh api -iX PUT repos/o/r/pulls/5/merge", True),
+    ("gh api -siX PATCH repos/o/r/pulls/5", True),
+    ("gh api -XPUT repos/o/r/pulls/5/merge", True),
+    ("gh api graphql -f query='query { viewer { login } }'", False),
+    ("gh api -i repos/o/r/pulls/5", False),
+])
+def test_gh_api_file_bodies_and_grouped_flags(g, cmd, blocked):
+    r = bash(g, cmd)
+    assert (r.returncode == BLOCK) is blocked, (cmd, r.stderr)
+
+
+def test_two_step_config_corruption_blocked(g):
+    cfgp = (g.main / ".ddaro" / "config.json").as_posix()
+    r = hook(g, "Write", file_path=cfgp, content="{bad json")
+    assert r.returncode == BLOCK and "stop parsing" in r.stderr
+    (g.main / ".ddaro" / "config.json").write_text("{bad json", encoding="utf-8")   # as if it had landed
+    r = hook(g, "Write", file_path=cfgp, content=json.dumps({"merge_gate": "off", "base_branch": "master"}))
+    assert r.returncode == BLOCK
+    r = hook(g, "Write", file_path=cfgp, content=json.dumps({"merge_gate": "strict", "base_branch": "master"}))
+    assert r.returncode == ALLOW
+
+
+@pytest.mark.skipif(os.name != "nt" and sys.platform != "darwin", reason="case-insensitive filesystems")
+def test_protected_paths_case_insensitive(g):
+    up = (g.main / ".DDARO" / "gates" / "x.json").as_posix()
+    assert hook(g, "Write", file_path=up, content="{}").returncode == BLOCK
+    assert bash(g, "echo '{}' > .DDARO/gates/x.json", cwd=g.main).returncode == BLOCK
+    assert bash(g, "python -c \"open('.DDARO/verify.json','w')\"", cwd=g.main).returncode == BLOCK
+
+
+@pytest.mark.parametrize("tmpl", [
+    "rm -rf {main}/.ddaro/*",
+    "cp /tmp/x {main}/.ddaro/gat[e]s/d.json",
+    "echo '{{}}' > {main}/.ddaro/g?tes/x.json",
+    "tee {main}/.ddaro/gat{{e,e}}s/x.json < /dev/null",
+    "rm {main}/.git/ddaro-gate",
+    "cp -t {main}/.ddaro/gates /tmp/x",
+    "python.exe -c \"open('{main}/.ddaro/config.json','w').write('x')\"",
+    "python3.11 -c \"open('{main}/.ddaro/gates/x.json','w')\"",
+    "python -c \"from pathlib import Path; Path('{main}/.ddaro/gates/x.json').write_text('x')\"",
+    "dd if=/tmp/f of={main}/.ddaro/gates/x.json",
+    "echo '[alias] p = !git push' >> {main}/.git/config",
+])
+def test_more_protected_write_shapes_blocked(g, tmpl):
+    cmd = tmpl.format(main=g.main.as_posix())
+    r = bash(g, cmd, cwd=g.main)
+    assert r.returncode == BLOCK, (cmd, r.stderr)
+
+
+def test_stash_all_in_main_blocked_and_marker_init_rules(g):
+    assert bash(g, "git stash --all", cwd=g.main).returncode == BLOCK
+    assert bash(g, "git stash -u", cwd=g.main).returncode == BLOCK
+    assert bash(g, "git stash", cwd=g.main).returncode == ALLOW
+    assert bash(g, "git stash --all", cwd=g.wt).returncode == ALLOW      # not <main>
+    marker = Path(g.git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=g.main), "ddaro-gate")
+    marker.write_text("merge_gate=strict\n", encoding="utf-8")
+    (g.main / ".ddaro" / "config.json").unlink()
+    main = g.main.as_posix()
+    assert bash(g, f"python config_tool.py init {main} merge_gate=off").returncode == BLOCK
+    assert bash(g, f"python config_tool.py init {main} merge_gate=strict").returncode == ALLOW
+    # a config that says off while the marker exists was not written by config_tool: strict
+    g.write_cfg(merge_gate="off")
+    g.set_pr(89, g.head())
+    assert bash(g, "gh pr merge 89 --squash").returncode == BLOCK
+
+
+def test_variable_main_argument_resolved_and_outside_cwd(g):
+    main = g.main.as_posix()
+    cmd = f"cd {g.tmp.as_posix()} && M={main} && python gate.py approve $M d-busan --head HEAD --reason x"
+    r = bash(g, cmd, cwd=g.wt)
+    assert r.returncode == BLOCK and "person's command" in r.stderr
+    cmd = f"export M={main}; python config_tool.py set $M merge_gate off"
+    assert bash(g, cmd, cwd=g.tmp).returncode == BLOCK
+
+
+def test_cd_to_unresolvable_target_keeps_gate(g):
+    passed_pr(g)
+    r = bash(g, "cd $WT/sub && gh pr merge 89 --squash", cwd=g.wt)
+    assert r.returncode == BLOCK and "match-head-commit" in r.stderr
+    r = bash(g, "cd does-not-exist && gh pr merge 89 --squash", cwd=g.wt)
+    assert r.returncode == BLOCK
+
+
+def test_merge_value_flags_before_selector_allowed(g):
+    h = passed_pr(g)
+    r = bash(g, f'gh pr merge --subject "Fix x" 89 --squash --match-head-commit {h}')
+    assert r.returncode == ALLOW, r.stderr
+
+
+def test_multi_refspec_auto_merge_pairs(g):
+    g.git("branch", "other")
+    g.commit("src/app.js", "a\n", "c1")
+    pr = {"number": 7, "state": "OPEN", "baseRefName": "master", "headRefName": "other", "headRefOid": g.git("rev-parse", "other"),
+          "autoMergeRequest": {"enabledAt": "now"}, "files": [], "changedFiles": 0}
+    g.gh(list=[pr], view={"7": pr})
+    r = bash(g, "git push origin other d-busan")
+    assert r.returncode == BLOCK and "on other has auto-merge" in r.stderr
+
+
+def test_broken_shared_module_fails_closed(g, tmp_path):
+    passed_pr(g)
+    broken = tmp_path / "hooks_copy"
+    broken.mkdir()
+    for f in HOOK.parent.glob("*.py"):
+        (broken / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+    (broken / "_shared.py").write_text("raise ImportError('simulated')\n", encoding="utf-8")
+    for cmd in ("gh pr merge 89 --squash", "git push origin master"):
+        payload = {"tool_name": "Bash", "cwd": g.wt.as_posix(), "tool_input": {"command": cmd}}
+        r = subprocess.run([sys.executable, str(broken / "check-merge-gate.py")], input=json.dumps(payload),
+                           capture_output=True, text=True, encoding="utf-8", env=g.env())
+        assert r.returncode == BLOCK and "[ddaro] merge_gate" in r.stderr, cmd
+
+
+def test_fallback_warn_mode_adds_context(g, capsys):
+    spec = importlib.util.spec_from_file_location("cmg2", HOOK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    g.write_cfg(merge_gate="warn")
+    payload = {"tool_name": "Bash", "cwd": g.wt.as_posix(), "tool_input": {"command": "gh pr merge 89"}}
+    assert mod._fallback(payload) == ALLOW
+    out = capsys.readouterr().out
+    assert "additionalContext" in out and "could not parse" in out
+
+
+def test_non_gated_repo_git_commands_exit_quietly(tmp_path, g):
+    other = tmp_path / "plain"
+    other.mkdir()
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    payload = {"tool_name": "Bash", "cwd": other.as_posix(), "tool_input": {"command": "git status && gh pr list"}}
+    r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True,
+                       encoding="utf-8", env=g.env())
+    assert r.returncode == ALLOW and r.stdout == "" and r.stderr == ""
+
+
+def test_marker_write_tool_blocked(g):
+    marker = Path(g.git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=g.main), "ddaro-gate")
+    assert hook(g, "Write", file_path=marker.as_posix(), content="").returncode == BLOCK
+    assert hook(g, "Edit", file_path=(g.main / ".git" / "config").as_posix(), old_string="a", new_string="[alias]").returncode == BLOCK

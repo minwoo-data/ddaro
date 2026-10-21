@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -532,15 +533,23 @@ def test_scope_mismatch_errors(g):
 
 
 def test_meta_mismatch_run_tag_head_range(g):
-    g.commit("src/app.js", "a\n", "c1")
-    b = g.begin()
-    for over in ({"run_tag": "other"}, {"head": "0" * 40}, {"range": "x"}):
+    for over, field in (({"run_tag": "other"}, "run_tag"), ({"head": "0" * 40}, "head"), ({"range": "x"}, "range")):
+        g.commit("src/app.js", f"{field}\n", f"c-{field}")
+        b = g.begin()
         g.write_report(b, [], meta_over=over)
         r = g.record(b["run"])
-        assert r["outcome"] in ("ERROR",) if False else True
-        # the first record wins (already recorded afterwards); check stored outcome once
-        break
-    assert g.record(b["run"])["outcome"] == "ERROR"
+        assert r["outcome"] == "ERROR" and any(field in e for e in r["errors"]), (field, r["errors"])
+
+
+def test_candidate_without_record_is_error(g):
+    g.commit("src/app.js", "a\n", "c1")
+    b = g.begin()
+    rep = make_report(b, [finding("c1", "SUPPORTED", "LOW", claim="minor", quote_lines=[1])])
+    rep["meta"]["candidate_ids"] = ["c1", "c2"]
+    g.write_run_file(b)
+    (g.run_dir(b) / "prism-report.json").write_text(json.dumps(rep), encoding="utf-8")
+    r = g.record(b["run"])
+    assert r["outcome"] == "ERROR" and any("후보 레코드 누락: c2" in e for e in r["errors"])
 
 
 def test_close_fixed_quote_on_changed_line(g):
@@ -990,3 +999,170 @@ def test_blockers_survive_amend_rebase_full_and_reset(g):
     g.git("reset", "-q", "--hard", first_pass)
     s = g.status()
     assert s["mergeable"] is False and s["reason"] == "open_blockers"
+
+
+# ---------------------------------------------------------------------------
+# prism review fixes (PR #22, 2026-10-20)
+# ---------------------------------------------------------------------------
+
+def test_verify_that_forges_gate_state_is_refused(g):
+    """c13: a committed test writes an approval into the state file -> REFUSED, state restored."""
+    pass_run(g)
+    h = g.commit("src/app.js", "function a() {\n  return 3;\n}\n", "bad")
+    st_path = g.main / ".ddaro" / "gates" / "d-busan.f486a3be.json"
+    forge = g.tmp / "forge.py"
+    forge.write_text(f"""
+import json
+p = {str(st_path)!r}
+d = json.load(open(p, encoding='utf-8'))
+d['approvals'].append({{'cycle': d['cycle'], 'head': {h!r}, 'reason': 'forged', 'overrides': [], 'at': 't'}})
+json.dump(d, open(p, 'w', encoding='utf-8'))
+""", encoding="utf-8")
+    g.write_verify({"commands": [], "default": f'"{sys.executable}" "{forge.as_posix()}"'})
+    b = g.begin()
+    assert b["outcome"] == "REFUSED" and "게이트 상태를 바꿈" in b["message"]
+    s = g.status(head=h)
+    assert s["mergeable"] is False and s["reason"] != "approved"
+    assert g.state()["approvals"] == []
+
+
+def test_claude_dir_is_never_a_document(g):
+    """c15: `.claude/**/*.md` carries executable config; never docs-only."""
+    g.write_cfg(planning_patterns=None)
+    cfg = g.cfg
+    cfg.pop("planning_patterns", None)
+    g.write_cfg()
+    head, _ = pass_run(g)
+    h2 = g.commit(".claude/commands/deploy.md", "---\nallowed-tools: Bash\n---\n!rm -rf /\n", "cmd")
+    assert g.status(head=h2)["reason"] == "stale_pass"
+    s = gate.compute_status(g.main, "d-busan", h2, pr_files=[".claude/commands/deploy.md"], pr_changed_files=1)
+    assert s["reason"] != "docs_only_pr"
+    assert gate.is_doc("CHANGELOG.md", {}) and not gate.is_doc(".github/workflows/x.md", {})
+
+
+def test_planning_patterns_string_falls_back_to_default(g):
+    """c25: a raw JSON string must not be iterated character by character."""
+    cfg = dict(g.cfg, planning_patterns='["docs/**"]')
+    assert gate.is_doc("NOTES.md", cfg) is False
+    assert gate.is_doc("CHANGELOG.md", cfg) is True
+    assert gate.planning_patterns(cfg) == gate.DEFAULT_PLANNING_PATTERNS
+
+
+def test_non_ascii_path_blocker_closes(g):
+    """c18: git C-quotes non-ASCII paths; the index keys must still match."""
+    pass_run(g)
+    g.commit("문서/코드.js", "function a() {\n  return 3;\n}\n", "kr")
+    b = g.begin()
+    g.write_report(b, [finding("c1", "SUPPORTED", "MED", file="문서/코드.js", lines="2", claim="returns 3",
+                               evidence=["문서/코드.js:2 \u2014 return 3;"], quote_lines=[2])])
+    bid = g.record(b["run"])["new_blockers"][0]
+    g.commit("문서/코드.js", "function a() {\n  return compute();\n}\n", "fix")
+    b2 = g.begin()
+    g.write_report(b2, [rejected(bid, file="문서/코드.js")])
+    r2 = g.record(b2["run"])
+    assert r2["outcome"] == "PASS" and r2["closed_blockers"][0]["closed_by"] == "fixed"
+    quoted = '"a/' + chr(92) + '354' + chr(92) + '225' + chr(92) + '234.py"'
+    assert gate.unquote_git_path(quoted) == 'a/' + bytes([0o354, 0o225, 0o234]).decode('utf-8') + '.py'
+
+
+def test_resolve_main_ignores_foreign_main_worktree(g, tmp_path):
+    """c19: a main_worktree outside this repository is not where the state goes."""
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    g.write_cfg(main_worktree=other.as_posix())
+    head, _ = pass_run(g)
+    assert g.status()["mergeable"] is True
+    assert not (other / ".ddaro").exists()
+
+
+def test_shift_lines_insertion_inside_range(g):
+    """c22: an insertion inside the blocker's range extends it."""
+    content = "".join(f"line {i}\n" for i in range(1, 15))
+    h1 = g.commit("src/big.js", content, "big")
+    lines = content.splitlines()
+    lines[12:12] = ["ins a", "ins b", "ins c"]          # after old line 12
+    h2 = g.commit("src/big.js", "\n".join(lines) + "\n", "insert")
+    repo = gate.Repo(g.wt)
+    blk = {"file": "src/big.js", "lines": "10-14", "head": h1}
+    assert gate.shift_lines(repo, blk, h2, h1) == ("10-17", False)
+    lines2 = content.splitlines()
+    lines2[8:8] = ["top"]
+    h3 = g.commit("src/big.js", "\n".join(lines2) + "\n", "insert above")
+    assert gate.shift_lines(repo, blk, h3, h1) == ("11-15", False)
+
+
+def test_reset_and_retire_refuse_while_locked(g):
+    pass_run(g)
+    lock = g.main / ".ddaro" / "gates" / "d-busan.f486a3be.lock"
+    holder = subprocess.Popen([sys.executable, "-c", f"""
+import sys, time; sys.path.insert(0, {str(gate.Path(gate.__file__).parent)!r})
+from _shared import file_lock
+with file_lock({str(lock)!r}, 1):
+    print('held', flush=True); time.sleep(8)
+"""], stdout=subprocess.PIPE, text=True)
+    assert holder.stdout.readline().strip() == "held"
+    try:
+        out = g.gate("reset", str(g.main), "d-busan", "--force")
+        assert out["outcome"] == "REFUSED" and "locked by pid" in out["message"]
+        assert (g.main / ".ddaro" / "gates" / "d-busan.f486a3be.json").exists()
+        assert "pid ?" not in out["message"]        # c32: the holder's pid is readable
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_pending_verify_run_is_finalized(g):
+    """c31: a verify-kind run left with outcome None is closed by the next check-begin."""
+    head, _ = pass_run(g)
+    st = g.state()
+    st["runs"].append({"run": 40, "cycle": 1, "kind": "verify", "head": head, "outcome": None, "scope": "verify"})
+    st["next_run"] = 41
+    g.write_state(st)
+    g.commit("src/app.js", "y\n", "c2")
+    b = g.begin()
+    assert any(f["run"] == 40 and "abandoned" in (f["error"] or "") for f in b["finalized"])
+    assert b["scope"] == "recheck"
+
+
+def test_block_and_verify_only_summaries_carry_notes(g):
+    """c44: `note:` lines appear on every summary, not only the OK one."""
+    g.gh(fail="offline")
+    g.write_verify({"commands": [], "default": "false"})
+    g.commit("src/app.js", "a\n", "c1")
+    b = g.begin()
+    assert b["outcome"] == "BLOCK" and any("머지 확인 못 함" in l for l in b["summary"])
+
+
+def test_corrupt_archive_is_moved_aside(g):
+    head, _ = pass_run(g)
+    adir = g.main / ".ddaro" / "gates" / "archive" / "d-busan.f486a3be"
+    adir.mkdir(parents=True)
+    (adir / "cycle-1.json").write_text("{garbage", encoding="utf-8")
+    g.gh(view={"89": {"number": 89, "state": "MERGED", "baseRefName": "master", "headRefName": "d-busan", "headRefOid": head}})
+    out = g.gate("close", str(g.main), "d-busan", "--merged", "--pr", "89")
+    assert out["closed"] is True
+    assert list(adir.glob("cycle-1.corrupt-*.json")) and json.loads((adir / "cycle-1.json").read_text(encoding="utf-8"))["runs"]
+    assert "unreadable archive" in g.state()["closes"][0].get("note", "")
+
+
+def test_status_git_unavailable_is_unreadable_not_mergeable(g):
+    head, _ = pass_run(g)
+    g.commit("docs/x.md", "d\n", "docs")
+    s = gate.compute_status(g.main, "d-busan", g.head(), repo=gate.Repo(g.main, timeout=0.0001))
+    assert s["mergeable"] is False and s["reason"] == "unreadable"
+
+
+def test_merge_confirm_notes_fetch_failure(g):
+    head, _ = pass_run(g)
+    g.gh(list=[{"number": 7, "state": "MERGED", "baseRefName": "master", "headRefName": "d-busan", "headRefOid": "e" * 40}])
+    g.git("remote", "remove", "origin", cwd=g.main)
+    g.git("remote", "add", "origin", (g.tmp / "nowhere.git").as_posix(), cwd=g.main)
+    g.commit("src/app.js", "y\n", "c2")
+    out = g.gate("close", str(g.main), "d-busan", "--merged", "--pr", "7")
+    assert out["closed"] is False and "not local after fetch" in out["message"]
+
+
+def test_make_run_tag_contract():
+    tag, rand = gate.make_run_tag("Feat/Login page", "0" * 40, 3)
+    assert isinstance(tag, str) and tag.endswith(f"-{rand}") and len(rand) == 6
+    assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", tag)

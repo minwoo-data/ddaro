@@ -14,6 +14,7 @@ Usage (called by the slash commands, never by hooks):
     python config_tool.py ensure-schema <main_worktree>     # idempotent; prints 1 line only when it changed something; no config -> exit 0, creates nothing
     python config_tool.py set <main_worktree> <key> <value> # write one key (base_branch warns on verify failure); no config -> exit 1
     python config_tool.py init <main_worktree> [key=value ...] # create config.json (schema 4 defaults); exit 1 when one exists
+    python config_tool.py set <main_worktree> planning_patterns '["docs/**", ".planning/**"]'   # list keys take a JSON array
 
 Writes are atomic (temp file + os.replace), taken under the short config lock
 (`.ddaro/config.lock`), and preserve unknown keys.
@@ -164,6 +165,8 @@ def ensure_schema(main_path: Path) -> list:
     "key=value" strings for what changed (empty when already current).
     Raises FileNotFoundError when there is no config.json - ensure-schema
     never CREATES a config (that is the first-run wizard's job)."""
+    if not _config_path(main_path).is_file():
+        raise FileNotFoundError(str(_config_path(main_path)))   # never create .ddaro/ for a non-project
     with file_lock(_lock_path(main_path)):
         return _ensure_schema_locked(main_path)
 
@@ -204,9 +207,29 @@ def _ensure_schema_locked(main_path: Path) -> list:
     return changed
 
 
+LIST_KEYS = ("planning_patterns", "protected_worktrees", "external_patterns")
+
+
+def decode_value(key: str, value: str):
+    """`set` stores list-valued keys as lists: the value is a JSON array, or a
+    single pattern. Everything else stays a string."""
+    if key in LIST_KEYS:
+        try:
+            v = json.loads(value)
+        except ValueError:
+            return [value]
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise ValueError(f"{key} must be a JSON array of strings (got {value!r})")
+        return v
+    return value
+
+
 def set_key(main_path: Path, key: str, value: str) -> None:
     if key in GATE_KEYS and value not in GATE_KEYS[key]:
         raise ValueError(f"{key} must be one of {', '.join(GATE_KEYS[key])} (got {value!r})")
+    stored = decode_value(key, value)
+    if not _config_path(main_path).is_file():
+        raise FileNotFoundError(str(_config_path(main_path)))
     with file_lock(_lock_path(main_path)):
         cfg = _load(main_path)
         if key == "base_branch" and not ref_exists(main_path, value):
@@ -214,10 +237,10 @@ def set_key(main_path: Path, key: str, value: str) -> None:
                 f"[ddaro] warning: branch '{value}' not found in {main_path}; writing anyway",
                 file=sys.stderr,
             )
-        cfg[key] = value
+        cfg[key] = stored
         _save(main_path, cfg)
-    if key == "merge_gate":
-        _update_marker(main_path, value)
+        if key == "merge_gate":
+            _update_marker(main_path, value)      # inside the lock: config and marker move together
 
 
 def _update_marker(main_path: Path, mode: str) -> None:
@@ -252,13 +275,19 @@ def init_config(main_path: Path, pairs: list) -> dict:
                 raise ValueError(f"init expects key=value, got {pair!r}")
             if k in GATE_KEYS and v not in GATE_KEYS[k]:
                 raise ValueError(f"{k} must be one of {', '.join(GATE_KEYS[k])} (got {v!r})")
-            try:
-                cfg[k] = json.loads(v)
-            except ValueError:
-                cfg[k] = v
+            if k in LIST_KEYS:
+                cfg[k] = decode_value(k, v)
+            else:
+                try:
+                    cfg[k] = json.loads(v)
+                except ValueError:
+                    cfg[k] = v
         _save(main_path, cfg)
         _ensure_schema_locked(main_path)
-        return _load(main_path)
+        final = _load(main_path)
+        if str(final.get("merge_gate", "off")).lower() != "off":
+            _update_marker(main_path, str(final["merge_gate"]))
+        return final
 
 
 def is_weakening(key: str, old, new) -> bool:
@@ -276,7 +305,7 @@ def is_weakening(key: str, old, new) -> bool:
     if key == "gate_verify":
         return _norm(old) != "none" and _norm(new) == "none"
     if key == "base_branch":
-        return (old or "") != (new or "")
+        return (old or FALLBACK) != (new or FALLBACK)      # absent == `main`, as _shared.base_branch reads it
     if key == "planning_patterns":
         o = list(old or [])
         n = list(new or [])

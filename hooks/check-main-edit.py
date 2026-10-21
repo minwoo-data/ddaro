@@ -71,7 +71,9 @@ def main() -> int:
         return 0
 
     # Files on the planning whitelist are always allowed.
-    patterns = cfg.get("planning_patterns") or DEFAULT_PLANNING_PATTERNS
+    patterns = cfg.get("planning_patterns")
+    if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns) or not patterns:
+        patterns = DEFAULT_PLANNING_PATTERNS
     try:
         rel = target.resolve().relative_to(main_path.resolve())
     except Exception:
@@ -140,7 +142,9 @@ def _refusal(main_path: Path, target: Path) -> str:
         "         (edit + /ddaro:commit + /ddaro:merge)\n"
         "    2) One-shot bypass:\n"
         "         ALLOW_MAIN_DIRECT=1 <your command>\n"
-        "    3) Add this path pattern to planning_patterns in .ddaro/config.json.\n"
+        "    3) Add this path pattern to planning_patterns:\n"
+        "         python <plugin>/hooks/config_tool.py set <main> planning_patterns '[\"<existing>\", \"<pattern>\"]'\n"
+        "       (with merge_gate on, a person runs it with `!`)\n"
         "    4) Disable strict protection:\n"
         "         /ddaro:config main_protection off\n"
     )

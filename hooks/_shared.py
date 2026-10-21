@@ -364,10 +364,8 @@ def command_has_git_commit(command: str) -> bool:
 # `gh pr list`), each with its own time limit. `check-worktree-branch-match`
 # already uses `git symbolic-ref` the same way.
 
-import hashlib  # noqa: E402
-import subprocess  # noqa: E402
-import time  # noqa: E402
-from contextlib import contextmanager  # noqa: E402
+# (hashlib, subprocess and time are imported inside the functions that use them, so the
+#  existing hooks' import of this module pays nothing for the gate helpers.)
 
 _TOKEN_LEAD = "({!"
 _TOKEN_TAIL = ")};"
@@ -466,6 +464,7 @@ def run_cmd(args: list, cwd: Optional[Path] = None, timeout: float = 10.0, env: 
     """Run a command, kill its whole process tree on timeout. Returns
     (returncode, stdout, stderr) with text decoded as UTF-8; returncode is
     None when the command could not run or timed out. Never raises."""
+    import subprocess
     try:
         kwargs = dict(cwd=str(cwd) if cwd else None, stdout=subprocess.PIPE,
                       stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
@@ -492,6 +491,7 @@ def run_cmd(args: list, cwd: Optional[Path] = None, timeout: float = 10.0, env: 
 
 def kill_tree(proc) -> None:
     """Terminate `proc` and every descendant. Best effort, never raises."""
+    import subprocess
     try:
         if os.name == "nt":
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
@@ -654,48 +654,64 @@ def prism_report_contract(install_path: Path) -> tuple:
     return major, None
 
 
-@contextmanager
-def file_lock(path: Path, timeout: float = 5.0):
+class file_lock:
     """Short OS lock on `path` (msvcrt.locking on Windows, fcntl.flock
-    elsewhere). Released when the process dies. Raises TimeoutError("locked
-    by pid N") when not acquired within `timeout` seconds (L1)."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(path, "a+")
-    locked = False
-    try:
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                if os.name == "nt":
-                    import msvcrt
-                    fh.seek(0)
-                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                locked = True
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    owner = ""
-                    try:
-                        fh.seek(0)
-                        owner = fh.read(64).strip()
-                    except Exception:
-                        pass
-                    raise TimeoutError(f"locked by pid {owner or '?'}")
-                time.sleep(0.1)
+    elsewhere), used as a context manager. Released when the process dies.
+    Raises TimeoutError("locked by pid N") when not acquired within `timeout`
+    seconds (L1). The locked byte is byte 0; the holder's pid is written from
+    byte 1 so a waiter can read it (Windows byte-range locks are mandatory)."""
+
+    def __init__(self, path, timeout: float = 5.0):
+        self.path = Path(path)
+        self.timeout = timeout
+        self.fh = None
+        self.locked = False
+
+    def __enter__(self):
+        import time
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = fh = open(self.path, "a+")
         try:
-            fh.seek(0)
-            fh.truncate()
-            fh.write(str(os.getpid()))
-            fh.flush()
-        except Exception:
-            pass
-        yield
-    finally:
-        if locked:
+            deadline = time.monotonic() + self.timeout
+            while True:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self.locked = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        owner = ""
+                        try:
+                            fh.seek(1)
+                            owner = fh.read(64).strip()
+                        except Exception:
+                            pass
+                        raise TimeoutError(f"locked by pid {owner or '?'}")
+                    time.sleep(0.1)
+            try:
+                fh.seek(0)
+                fh.truncate()
+                fh.write(" " + str(os.getpid()))
+                fh.flush()
+            except Exception:
+                pass
+        except BaseException:
+            fh.close()
+            self.fh = None
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        fh = self.fh
+        if fh is None:
+            return False
+        if self.locked:
             try:
                 if os.name == "nt":
                     import msvcrt
@@ -707,12 +723,15 @@ def file_lock(path: Path, timeout: float = 5.0):
             except Exception:
                 pass
         fh.close()
+        self.fh = None
+        return False
 
 
 def branch_enc(branch: str) -> str:
     """Percent-encode a branch name (everything outside `a-z 0-9 - _`,
     uppercase included) and append `.` + the first 8 hex of sha1 of the exact
     name: `branch_enc("d-busan") == "d-busan.f486a3be"` (L2)."""
+    import hashlib
     safe = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
     enc = "".join(c if c in safe else "".join(f"%{b:02X}" for b in c.encode("utf-8")) for c in branch)
     return f"{enc}.{hashlib.sha1(branch.encode('utf-8')).hexdigest()[:8]}"

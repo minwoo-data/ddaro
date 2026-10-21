@@ -60,6 +60,10 @@ if key == "pr view":
     print(json.dumps(pr)); sys.exit(0)
 if key == "pr merge":
     print("merged (fake)"); sys.exit(0)
+if key == "alias list":
+    for k, v in (script.get("aliases") or {}).items():
+        print(f"{k}: {v}")
+    sys.exit(0)
 if args[:1] == ["api"]:
     print(json.dumps(script.get("api", {}))); sys.exit(0)
 print(json.dumps(script.get("default", {}))); sys.exit(0)
