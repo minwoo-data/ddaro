@@ -71,7 +71,9 @@ def main() -> int:
         return 0
 
     # Files on the planning whitelist are always allowed.
-    patterns = cfg.get("planning_patterns") or DEFAULT_PLANNING_PATTERNS
+    patterns = cfg.get("planning_patterns")
+    if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns) or not patterns:
+        patterns = DEFAULT_PLANNING_PATTERNS
     try:
         rel = target.resolve().relative_to(main_path.resolve())
     except Exception:
@@ -81,11 +83,31 @@ def main() -> int:
         if _glob_match(rel_posix, pat):
             return 0
 
+    if run_folder_allowed(main_path, rel_posix):
+        return 0
+
     if bypass_active():
         return 0
 
     print(_refusal(main_path, target), file=sys.stderr)
     return 2
+
+
+def run_folder_allowed(main_path: Path, rel_posix: str) -> bool:
+    """0.10.0 merge gate (L5): prism writes its run files under
+    `<main>/.ddaro/runs/**`, which sits inside the main worktree. Allow that
+    folder only while `<main>/.ddaro/config.json` has `merge_gate` warn or
+    strict; with the gate off this hook behaves exactly as before. The run
+    folder's `prism-report.json` / `prism-run.json` are guarded separately by
+    `check-merge-gate.py` (L11)."""
+    try:
+        if not rel_posix.startswith(".ddaro/runs/"):
+            return False
+        from _shared import gate_mode, load_main_config_status
+        cfg, status = load_main_config_status(main_path)
+        return status == "ok" and gate_mode(cfg) != "off"
+    except Exception:
+        return False
 
 
 def _glob_match(path: str, pattern: str) -> bool:
@@ -120,7 +142,9 @@ def _refusal(main_path: Path, target: Path) -> str:
         "         (edit + /ddaro:commit + /ddaro:merge)\n"
         "    2) One-shot bypass:\n"
         "         ALLOW_MAIN_DIRECT=1 <your command>\n"
-        "    3) Add this path pattern to planning_patterns in .ddaro/config.json.\n"
+        "    3) Add this path pattern to planning_patterns:\n"
+        "         python <plugin>/hooks/config_tool.py set <main> planning_patterns '[\"<existing>\", \"<pattern>\"]'\n"
+        "       (with merge_gate on, a person runs it with `!`)\n"
         "    4) Disable strict protection:\n"
         "         /ddaro:config main_protection off\n"
     )

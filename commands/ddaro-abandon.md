@@ -17,4 +17,4 @@ Destructive. `<name>` is required. Must run from the main worktree (else print `
 1. Tier gate (`${CLAUDE_PLUGIN_ROOT}/reference/tiers.md`): owned -> continue; adopted -> only with `--force` (else refuse: "adopted; re-run with --force to delete the worktree and its branch"), and show "ADOPTED target - original_branch: <...>" in the preview; main / protected / unmanaged / external -> refuse with the reason.
 2. Re-check: path not in `protected_worktrees`; `.ddaro/OWNED` present.
 3. Preview: commits lost (unpushed / pushed), worktree path, snapshot count, and whether the remote branch is deleted (`--delete-remote`, or ask). Require the user to type exactly `yes, I'm sure`.
-4. `git worktree remove --force <path>`, `git branch -D <LOCK.branch>`, and if chosen `git push origin --delete <LOCK.branch>`. cwd stays in main.
+4. `git worktree remove --force <path>`, `git branch -D <LOCK.branch>`, and if chosen `git push origin --delete <LOCK.branch>`. After the branch is deleted: `python "${CLAUDE_PLUGIN_ROOT}/hooks/gate.py" retire <main_worktree> <LOCK.branch>`. cwd stays in main.

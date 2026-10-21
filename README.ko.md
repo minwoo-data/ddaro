@@ -70,7 +70,7 @@ Session A에서 `/ddaro:start billing`, Session B에서 `/ddaro:start auth`. 세
 /ddaro:review <file>          # 문서: prism design 렌즈 + triad 병렬 / diff: prism --diff, findings 문서에 합치기
 /ddaro:commit                 # 안전 검증 + commit + push + context 스냅샷
 /ddaro:commit --verify        # ...추가로 프로젝트의 verify 명령 실행 (0.4.0 new)
-/ddaro:check                  # 머지 전 prism + ship 체크리스트 게이트 (0.6.0 new)
+/ddaro:check                  # 머지 전 게이트: 테스트 + diff prism. merge_gate 를 켜면 커밋에 묶인 스크립트 판정 PASS/BLOCK (0.10.0)
 /ddaro:merge                  # 규모별 리뷰 + CI 오케스트레이션 + merge + sync-main (0.4.0 new)
 ```
 
@@ -148,6 +148,10 @@ Config 파일 위치: `<main-worktree>/.ddaro/config.json`
 **0.4.0 이하에서 업그레이드:** 구버전은 이 훅들을 각 프로젝트의 `.claude/settings.json` 에 설치했습니다. Claude Code 가 정확한 명령 문자열로 훅을 중복 제거하므로 이중 실행은 없지만, 남은 항목은 이제 불필요합니다. `/ddaro:config migrate` 로 한 번에 제거하세요 (idempotent; ddaro 외 훅은 그대로 보존).
 
 ---
+
+### 머지 게이트 *(0.10.0, 선택)*
+
+`/ddaro:config merge_gate strict`를 켜면 `/ddaro:check`가 스크립트 판정 게이트가 되고, `gh pr merge`는 머지하려는 바로 그 커밋에 대한 PASS가 있어야 실행된다. 흐름: `gate.py check-begin`이 프로젝트 테스트(`<main>/.ddaro/verify.json`)를 먼저 돌리고, prism `--run-tag` 게이트 실행이 diff를 리뷰하며(새 에이전트, 인용은 커밋 기준으로 기계 검증), `gate.py check-record`가 리포트를 그 SHA에 묶인 PASS/BLOCK으로 바꾼다. 그 뒤 코드 커밋이 하나라도 들어오면 PASS가 풀리고(문서만 바뀐 커밋은 이월), 열린 차단 항목은 prism 근거 단계가 바뀐 코드 줄의 인용으로 REJECTED를 내야만 닫힌다. PreToolUse 훅 `check-merge-gate.py`는 `--match-head-commit <head>` 없는 `gh pr merge`, 그 head에 PASS가 없는 머지, base 브랜치로의 push, 쓰기 `gh api`, 게이트 파일과 설정에 대한 모델의 변경을 거부한다. 승인, 넘기기, 약화는 사람이 `!` 명령으로 한다. `warn`은 같은 검사를 경고로만 낸다. prism 0.6.0 이상 필요. 상세: `reference/config.md`, `reference/hooks.md`.
 
 ## 실제 사용 예
 

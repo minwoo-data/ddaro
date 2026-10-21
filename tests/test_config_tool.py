@@ -115,11 +115,11 @@ def test_ensure_schema_fills_missing_keys_and_bumps(tmp_path):
     _write_cfg(root)
     r = _cli("ensure-schema", root.as_posix())
     assert r.returncode == 0
-    assert "schema 3" in r.stdout
+    assert "schema 4" in r.stdout
     cfg = _read_cfg(root)
     assert cfg["base_branch"] == "master"
     assert cfg["auto_snapshot"] == "on"
-    assert cfg["schema_version"] == 3
+    assert cfg["schema_version"] == 4
     assert cfg["main_worktree"] == root.as_posix()  # untouched
 
 
@@ -186,3 +186,54 @@ def test_set_base_branch_warns_but_writes(tmp_path):
     r = _cli("set", root.as_posix(), "base_branch", "nope")
     assert r.returncode == 0 and "not found" in r.stderr
     assert _read_cfg(root)["base_branch"] == "nope"
+
+
+# --- 0.10.0 merge gate keys (prism review fixes) ---
+
+def test_init_writes_marker_and_refuses_twice(tmp_path):
+    root = _repo(tmp_path, "r", "master")
+    r = _cli("init", root.as_posix(), "merge_gate=strict", "language=korean")
+    assert r.returncode == 0, r.stderr
+    cfg = _read_cfg(root)
+    assert cfg["merge_gate"] == "strict" and cfg["language"] == "korean" and cfg["schema_version"] == 4
+    assert (root / ".git" / "ddaro-gate").read_text(encoding="utf-8").strip() == "merge_gate=strict"
+    assert _cli("init", root.as_posix()).returncode == 1
+
+
+def test_ensure_schema_without_config_creates_nothing(tmp_path):
+    root = _repo(tmp_path, "r", "master")
+    assert _cli("ensure-schema", root.as_posix()).returncode == 0
+    assert _cli("set", root.as_posix(), "merge_gate", "strict").returncode == 1
+    assert not (root / ".ddaro").exists()
+
+
+def test_set_gate_keys_validates_and_marks(tmp_path):
+    root = _repo(tmp_path, "r", "master")
+    _write_cfg(root)
+    assert _cli("set", root.as_posix(), "merge_gate", "loud").returncode == 1
+    assert _cli("set", root.as_posix(), "merge_gate", "warn").returncode == 0
+    assert (root / ".git" / "ddaro-gate").exists()
+    assert _cli("set", root.as_posix(), "merge_gate", "off").returncode == 0
+    assert not (root / ".git" / "ddaro-gate").exists()
+
+
+def test_set_list_key_stores_a_list(tmp_path):
+    root = _repo(tmp_path, "r", "master")
+    _write_cfg(root)
+    assert _cli("set", root.as_posix(), "planning_patterns", '["docs/**", "STATE.md"]').returncode == 0
+    assert _read_cfg(root)["planning_patterns"] == ["docs/**", "STATE.md"]
+    assert _cli("set", root.as_posix(), "planning_patterns", "notes/**").returncode == 0
+    assert _read_cfg(root)["planning_patterns"] == ["notes/**"]
+    assert _cli("set", root.as_posix(), "planning_patterns", '{"a": 1}').returncode == 1
+
+
+def test_is_weakening_rules():
+    w = config_tool.is_weakening
+    assert w("merge_gate", "strict", "warn") and w("merge_gate", "warn", "off") and not w("merge_gate", "off", "strict")
+    assert w("merge_gate", "bogus", "warn")                     # unknown counts as strict
+    assert w("gate_block_severity", "MED", "HIGH") and not w("gate_block_severity", "HIGH", "MED")
+    assert w("gate_verify", "auto", "none") and not w("gate_verify", "none", "auto")
+    assert w("base_branch", "main", "develop") and not w("base_branch", None, "main") and not w("base_branch", "main", None)
+    assert w("planning_patterns", ["a"], ["a", "b"]) and not w("planning_patterns", ["a", "b"], ["a"])
+    assert w("planning_patterns", ["a"], ["c"])
+    assert config_tool.weakening_changes({"merge_gate": "strict"}, {"merge_gate": "strict", "base_branch": "main"}) == []

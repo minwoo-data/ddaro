@@ -8,6 +8,7 @@ model reaches it through `/ddaro <sub>`), and carry the exact same Step 0.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -75,3 +76,40 @@ def test_plugin_paths_exist(path):
 
 def test_no_skills_dir_left():
     assert not (ROOT / "skills").exists()
+
+
+# --- 0.10.0 merge gate: the command files must hand the gate's verdict through untouched ---
+
+GATE_CALLERS = [p for p in COMMANDS if "hooks/gate.py" in p.read_text(encoding="utf-8")]
+
+
+def test_gate_callers_exist():
+    names = {p.name for p in GATE_CALLERS}
+    assert {"ddaro-check.md", "ddaro-merge.md", "ddaro-clear.md", "ddaro-abandon.md"} <= names
+
+
+@pytest.mark.parametrize("path", [p for p in GATE_CALLERS if p.name in ("ddaro-check.md", "ddaro-merge.md")], ids=lambda p: p.name)
+def test_gate_callers_print_summary_verbatim(path):
+    text = path.read_text(encoding="utf-8")
+    assert "`summary`" in text and "verbatim" in text
+
+
+def test_check_flow_uses_skill_tool_for_prism():
+    text = (ROOT / "commands" / "ddaro-check.md").read_text(encoding="utf-8")
+    assert "Skill tool" in text and "`prism:prism`" in text and "`prism_skill_args`" in text
+    assert "check-begin <wt> [--full]" in text and "check-record <wt> --run <run>" in text
+    for name in ("ddaro-check.md", "ddaro.md"):
+        assert "Skill" in _frontmatter(ROOT / "commands" / name)["allowed-tools"], name
+
+
+def test_merge_flow_has_gate_steps():
+    text = (ROOT / "commands" / "ddaro-merge.md").read_text(encoding="utf-8")
+    assert "gate.py\" status <main> --branch <branch>" in text
+    assert "--match-head-commit <headRefOid>" in text and "--body-file" in text
+    assert "close <main> <branch> --merged --pr <N>" in text
+
+
+def test_hooks_json_registers_merge_gate_once():
+    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    cmds = [h["command"] for grp in hooks["hooks"]["PreToolUse"] for h in grp["hooks"]]
+    assert sum("check-merge-gate.py" in c for c in cmds) == 1

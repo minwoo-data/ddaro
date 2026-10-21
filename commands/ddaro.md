@@ -2,7 +2,7 @@
 name: ddaro
 description: "Worktree-per-session git workflow for parallel Claude sessions. /ddaro <start|commit|merge|resume|status|list|clear|adopt|abandon|config|go|spec|review|check> [args]. Triggers: 따로, 병렬로, 분리해서, main 건드리지 마."
 argument-hint: "<subcommand> [args]"
-allowed-tools: [Agent, Bash, Read, Write, Edit, Glob, Grep]
+allowed-tools: [Agent, Bash, Read, Write, Edit, Glob, Grep, Skill]
 ---
 
 # /ddaro

@@ -4,6 +4,12 @@ Philosophy: fail open on any exception. Blocking a user because our hook
 misread a file is worse than missing an unwanted commit. strict mode is
 opt-in, so users who want the guarantee accept the cost of occasional
 misses when Python / config / environment goes sideways.
+
+The protective hooks (main_protection, branch naming, ...) never shell out.
+The merge-gate helpers at the bottom (0.10.0) use git/gh only to classify a
+command that was already identified as a gate target (branch lookup,
+`@{push}`, `gh pr view`, `gh pr list`), each with a time limit, and the
+merge-gate hook fails CLOSED once a target is identified (merge-gate.md L9).
 """
 
 from __future__ import annotations
@@ -346,3 +352,386 @@ def command_has_git_commit(command: str) -> bool:
         return bool(command_git_commit_targets(command, Path(".")))
     except Exception:
         return False
+
+
+# --- 0.10.0: merge gate helpers --------------------------------------------
+#
+# Everything below is NEW surface for the merge gate (hooks/gate.py and
+# hooks/check-merge-gate.py). Nothing above changed: the protective hooks keep
+# their exact behaviour (tests/test_shared.py pins the return contracts). The
+# gate helpers may shell out to git, but only to classify a command that was
+# already identified as a gate target (branch lookup, `@{push}`, `gh pr view`,
+# `gh pr list`), each with its own time limit. `check-worktree-branch-match`
+# already uses `git symbolic-ref` the same way.
+
+# (hashlib, subprocess and time are imported inside the functions that use them, so the
+#  existing hooks' import of this module pays nothing for the gate helpers.)
+
+_TOKEN_LEAD = "({!"
+_TOKEN_TAIL = ")};"
+
+
+def strip_token(tok: str) -> str:
+    """Peel shell grouping punctuation off a token before comparing it:
+    leading `(`, `{`, `!` and trailing `)`, `}`, `;` (L8)."""
+    try:
+        return tok.lstrip(_TOKEN_LEAD).rstrip(_TOKEN_TAIL)
+    except Exception:
+        return tok
+
+
+def segments_with_cwd(command: str, cwd: Path) -> list:
+    """Split `command` into segments and give each its effective cwd.
+
+    Returns a list of dicts `{"text", "tokens", "cwd"}` in order. `cd <dir>` /
+    `pushd <dir>` segments are included (their own `cwd` is the directory
+    BEFORE the change) and every later segment's `cwd` reflects them, relative
+    paths resolved against the previous cwd. This is the cd tracking that
+    `command_git_commit_targets(follow_cd=True)` keeps private, extracted so the
+    merge gate can scan every token of every segment. Never raises."""
+    out = []
+    try:
+        here = Path(cwd)
+        for seg in _split_segments(command):
+            toks = _tokenize(seg)
+            out.append({"text": seg, "tokens": toks, "cwd": here})
+            if toks:
+                head = strip_token(toks[0])
+                if head in ("cd", "pushd") and len(toks) > 1 and not toks[1].startswith("-"):
+                    here = _join_dir(here, strip_token(toks[1]))
+    except Exception:
+        pass
+    return out
+
+
+def scan_git_global_opts(tokens: list, start: int, cwd: Path):
+    """Gate-side git option scanner. Like `_scan_git_invocation` but a
+    relative `-C` accumulates on the previous one (as git itself does:
+    `git -C a -C b` runs in `cwd/a/b`), and the `-c key=value` pairs are
+    returned too. Returns (target_dir, subcommand, sub_index, configs) where
+    sub_index is the token index of the subcommand (or None)."""
+    target = Path(cwd)
+    configs = []
+    i = start
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if not tok.startswith("-"):
+            return target, strip_token(tok), i, configs
+        key, eq, inline = tok.partition("=")
+        if key in _GIT_DIR_OPTS:
+            val = None
+            if eq:
+                val = inline
+            elif i + 1 < n:
+                val = tokens[i + 1]
+                i += 1
+            if val is not None:
+                target = _join_dir(target if key == "-C" else Path(cwd), val)
+            i += 1
+            continue
+        if key == "-c":
+            if eq:
+                configs.append(inline)
+            elif i + 1 < n:
+                configs.append(tokens[i + 1])
+                i += 1
+            i += 1
+            continue
+        if key in _GIT_OPTS_WITH_ARG and not eq:
+            i += 2
+            continue
+        i += 1
+    return target, None, None, configs
+
+
+def _basename_lower(tok: str) -> str:
+    t = strip_token(tok).replace("\\", "/").lower()
+    return t.rsplit("/", 1)[-1]
+
+
+def is_git_token(tok: str) -> bool:
+    """`git`, `git.exe`, or a path ending in one of them."""
+    return _basename_lower(tok) in ("git", "git.exe")
+
+
+def is_gh_token(tok: str) -> bool:
+    """`gh`, `gh.exe`, or a path ending in one of them."""
+    return _basename_lower(tok) in ("gh", "gh.exe")
+
+
+def run_cmd(args: list, cwd: Optional[Path] = None, timeout: float = 10.0, env: Optional[dict] = None):
+    """Run a command, kill its whole process tree on timeout. Returns
+    (returncode, stdout, stderr) with text decoded as UTF-8; returncode is
+    None when the command could not run or timed out. Never raises."""
+    import subprocess
+    try:
+        kwargs = dict(cwd=str(cwd) if cwd else None, stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+        if env is not None:
+            kwargs["env"] = env
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            kwargs["start_new_session"] = True
+        proc = subprocess.Popen(args, **kwargs)
+    except Exception as e:  # FileNotFoundError, OSError, ...
+        return None, "", str(e)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=5)
+        except Exception:
+            out, err = b"", b""
+        return None, out.decode("utf-8", "replace"), (err.decode("utf-8", "replace") + "\n[timeout]")
+    return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+
+
+def kill_tree(proc) -> None:
+    """Terminate `proc` and every descendant. Best effort, never raises."""
+    import subprocess
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
+        else:
+            import signal
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except Exception:
+                proc.kill()
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def git_out(args: list, cwd: Path, timeout: float = 10.0) -> Optional[str]:
+    """`git <args>` in cwd; stripped stdout on exit 0, None otherwise."""
+    rc, out, _ = run_cmd(["git", *args], cwd=cwd, timeout=timeout)
+    if rc != 0:
+        return None
+    return out.strip()
+
+
+def main_root_of(path: Path) -> Optional[Path]:
+    """`<main>` for any path inside a repository: the parent of
+    `git rev-parse --git-common-dir` (L10). None outside a repository."""
+    try:
+        p = Path(path)
+        if not p.is_dir():
+            p = p.parent
+        common = git_out(["rev-parse", "--path-format=absolute", "--git-common-dir"], p)
+        if not common:
+            common = git_out(["rev-parse", "--git-common-dir"], p)
+            if not common:
+                return None
+            c = Path(common)
+            if not c.is_absolute():
+                top = git_out(["rev-parse", "--show-toplevel"], p)
+                c = (Path(top) if top else p) / c
+            common = str(c)
+        return Path(common).resolve().parent
+    except Exception:
+        return None
+
+
+def load_main_config_status(main: Optional[Path]):
+    """(cfg or None, status) for `<main>/.ddaro/config.json`; status is one
+    of `ok`, `missing`, `unparseable`. Gate keys are read ONLY through this
+    (L10): a config nearer to cwd than `<main>` is never consulted."""
+    if main is None:
+        return None, "missing"
+    p = Path(main) / ".ddaro" / "config.json"
+    try:
+        if not p.is_file():
+            return None, "missing"
+        text = p.read_text(encoding="utf-8")
+    except Exception:
+        return None, "unparseable"
+    try:
+        cfg = json.loads(text)
+    except Exception:
+        return None, "unparseable"
+    if not isinstance(cfg, dict):
+        return None, "unparseable"
+    return cfg, "ok"
+
+
+def gate_mode(cfg: Optional[dict]) -> str:
+    """`merge_gate` normalized: off | warn | strict. Absent = off; an unknown
+    value counts as strict (L12: unknown values err toward the gate)."""
+    if cfg is None:
+        return "off"
+    v = cfg.get("merge_gate")
+    if v is None:
+        return "off"
+    s = str(v).strip().lower()
+    return s if s in ("off", "warn", "strict") else "strict"
+
+
+def gate_marker_path(main: Path) -> Optional[Path]:
+    """`$(git rev-parse --git-common-dir)/ddaro-gate` (L10). Left by
+    config_tool when the gate is warn/strict, removed only when set to off."""
+    try:
+        common = git_out(["rev-parse", "--path-format=absolute", "--git-common-dir"], Path(main))
+        if common:
+            return Path(common) / "ddaro-gate"
+        dotgit = Path(main) / ".git"
+        if dotgit.is_dir():
+            return dotgit / "ddaro-gate"
+    except Exception:
+        pass
+    return None
+
+
+def parse_lock(path: Path) -> Optional[dict]:
+    """Read a ddaro `.ddaro/LOCK`: JSON, or the old `key=value` lines
+    (donghaeng's `branch=d-busan`). None when absent or unreadable."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except Exception:
+        return None
+    try:
+        d = json.loads(text)
+        if isinstance(d, dict):
+            return d
+    except Exception:
+        pass
+    out = {}
+    for line in text.splitlines():
+        k, eq, v = line.partition("=")
+        if eq and k.strip():
+            out[k.strip()] = v.strip()
+    return out or None
+
+
+def claude_config_dir() -> Path:
+    """`~/.claude`, or `$CLAUDE_CONFIG_DIR` when set (Claude Code's own
+    override; also what the tests use)."""
+    v = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return Path(v) if v else Path.home() / ".claude"
+
+
+def prism_install_path() -> tuple:
+    """(installPath, None) of the installed prism from
+    `installed_plugins.json` `prism@haroom_plugins` (E18), or (None, reason).
+    The cache folder is never searched: several versions sit side by side."""
+    p = claude_config_dir() / "plugins" / "installed_plugins.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, f"{p} not found"
+    except Exception as e:
+        return None, f"{p} unreadable: {e}"
+    plugins = data.get("plugins", data) if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        return None, f"{p}: no plugins map"
+    entry = plugins.get("prism@haroom_plugins")
+    if isinstance(entry, list):
+        entry = entry[0] if entry else None
+    if not isinstance(entry, dict):
+        return None, "prism@haroom_plugins not installed"
+    ip = entry.get("installPath")
+    if not ip:
+        return None, "prism@haroom_plugins has no installPath"
+    return Path(str(ip)), None
+
+
+def prism_report_contract(install_path: Path) -> tuple:
+    """(major:int, None) from `<installPath>/skills/prism/report-contract.json`,
+    or (None, reason). prism <= 0.5.x has no such file."""
+    f = Path(install_path) / "skills" / "prism" / "report-contract.json"
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        major = int(str(data["report_contract"]).split(".")[0])
+    except FileNotFoundError:
+        return None, f"{f} not found"
+    except Exception as e:
+        return None, f"{f} unreadable: {e}"
+    return major, None
+
+
+class file_lock:
+    """Short OS lock on `path` (msvcrt.locking on Windows, fcntl.flock
+    elsewhere), used as a context manager. Released when the process dies.
+    Raises TimeoutError("locked by pid N") when not acquired within `timeout`
+    seconds (L1). The locked byte is byte 0; the holder's pid is written from
+    byte 1 so a waiter can read it (Windows byte-range locks are mandatory)."""
+
+    def __init__(self, path, timeout: float = 5.0):
+        self.path = Path(path)
+        self.timeout = timeout
+        self.fh = None
+        self.locked = False
+
+    def __enter__(self):
+        import time
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = fh = open(self.path, "a+")
+        try:
+            deadline = time.monotonic() + self.timeout
+            while True:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self.locked = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        owner = ""
+                        try:
+                            fh.seek(1)
+                            owner = fh.read(64).strip()
+                        except Exception:
+                            pass
+                        raise TimeoutError(f"locked by pid {owner or '?'}")
+                    time.sleep(0.1)
+            try:
+                fh.seek(0)
+                fh.truncate()
+                fh.write(" " + str(os.getpid()))
+                fh.flush()
+            except Exception:
+                pass
+        except BaseException:
+            fh.close()
+            self.fh = None
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        fh = self.fh
+        if fh is None:
+            return False
+        if self.locked:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+        fh.close()
+        self.fh = None
+        return False
+
+
+def branch_enc(branch: str) -> str:
+    """Percent-encode a branch name (everything outside `a-z 0-9 - _`,
+    uppercase included) and append `.` + the first 8 hex of sha1 of the exact
+    name: `branch_enc("d-busan") == "d-busan.f486a3be"` (L2)."""
+    import hashlib
+    safe = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+    enc = "".join(c if c in safe else "".join(f"%{b:02X}" for b in c.encode("utf-8")) for c in branch)
+    return f"{enc}.{hashlib.sha1(branch.encode('utf-8')).hexdigest()[:8]}"

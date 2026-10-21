@@ -17,5 +17,5 @@ Must run from the main worktree; otherwise print `cd <main_worktree>` + `/ddaro:
 1. No name: list owned/adopted worktrees whose branch is in `git branch --merged <base>` and let the user pick. Name: match `LOCK.branch` or the folder name.
 2. Refuse if the target is main, protected, external, or unmanaged, or if its branch is not in `git branch --merged <base>`; suggest `/ddaro:merge` first, or `/ddaro:abandon` to discard.
 3. Uncommitted changes in the target: show them and stop (clear never discards uncommitted work).
-4. `git worktree remove <path>`; if the folder is still on disk afterwards, remove it only when it is empty, then `git worktree prune`. `git branch -d <branch>`. If `origin/<branch>` exists ask y/n before `git push origin --delete <branch>`.
+4. `git worktree remove <path>`; if the folder is still on disk afterwards, remove it only when it is empty, then `git worktree prune`. `git branch -d <branch>`. If `origin/<branch>` exists ask y/n before `git push origin --delete <branch>`. After the branch is deleted: `python "${CLAUDE_PLUGIN_ROOT}/hooks/gate.py" retire <main_worktree> <branch>` (moves the merge-gate state aside; prints one line).
 5. Report what was removed. cwd stays in main.
