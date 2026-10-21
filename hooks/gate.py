@@ -637,6 +637,17 @@ def code_part(line: str, ext: str) -> str:
     return s.strip()
 
 
+def norm_code(line: str, ext: str) -> str:
+    """Comparison key for a line's code: the code part, whitespace-collapsed
+    and lowercased; indent-sensitive files (`.py`, `.yml`, ...) keep the
+    leading indent width, so a re-indent counts as a change."""
+    key = loose(code_part(line, ext))
+    if ext.lower() in INDENT_SENSITIVE and key:
+        raw = str(line)
+        key = f"{len(raw) - len(raw.lstrip())}:{key}"
+    return key
+
+
 def punct_only(code: str) -> bool:
     return re.sub(r"[\s\[\]\(\)\{\};,:]", "", code) == ""
 
@@ -730,11 +741,11 @@ def closing_check(repo: Repo, blocker: dict, rec: dict, run_head: str, base_fall
     entry = index.get(rec_file)
     if entry and quote_lines:
         for h in entry["hunks"]:
-            minus_codes = {loose(code_part(m, ext)) for m in h["minus"]}
+            minus_codes = {norm_code(m, ext) for m in h["minus"]}
             for ln, text in h["plus"]:
                 if ln in quote_lines:
                     cp = code_part(text, ext)
-                    if cp and not punct_only(cp) and loose(cp) not in minus_codes:
+                    if cp and not punct_only(cp) and norm_code(text, ext) not in minus_codes:
                         return "fixed"
     # removed: the originally quoted line is gone from the file at run_head
     b_file = blocker.get("file") or ""
@@ -744,10 +755,10 @@ def closing_check(repo: Repo, blocker: dict, rec: dict, run_head: str, base_fall
     if entry and quotes:
         new_path = entry.get("new_path") or b_file
         head_lines = None if entry.get("deleted") else repo.file_lines(run_head, new_path)
-        head_codes = {loose(code_part(l, b_ext)) for l in (head_lines or [])} - {""}
+        head_codes = {norm_code(l, b_ext) for l in (head_lines or [])} - {""}
         for h in entry["hunks"]:
             for m in h["minus"]:
-                cpm = loose(code_part(m, b_ext))
+                cpm = norm_code(m, b_ext)
                 if not cpm or not any(q in loose(m) for q in quotes):
                     continue
                 if head_lines is None:
